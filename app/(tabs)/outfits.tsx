@@ -3,7 +3,7 @@ import { View, Text } from "react-native";
 export default function OutfitsScreen() {
   return (
     <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-      <Text>Outfits, just checking</Text>
+      <Text>Outfits</Text>
     </View>
   );
 }
