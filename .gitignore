@@ -5,11 +5,14 @@ node_modules/
 
 # Expo
 .expo/
+.expo-shared/
 dist/
 web-build/
 expo-env.d.ts
 
 # Native
+android/
+ios/
 .kotlin/
 *.orig.*
 *.jks
@@ -25,12 +28,19 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+*.log
 
 # macOS
 .DS_Store
 *.pem
 
+#Editors
+.vscode/
+.idea/
+
 # local env files
+.env
+.env.*
 .env*.local
 
 # typescript
