@@ -11,6 +11,7 @@
     "lint": "eslint . || echo 'No lint configured'"
   },
   "dependencies": {
+<<<<<<< HEAD
     "expo": "^54.0.8",
     "expo-constants": "~18.0.9",
     "expo-linking": "~8.0.8",
@@ -22,6 +23,15 @@
     "react-native-gesture-handler": "~2.28.0",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0"
+=======
+    "expo": "~53.0.22",
+    "expo-status-bar": "~2.2.3",
+    "react": "19.0.0",
+    "react-native": "0.79.5",
+    "expo-router": "~5.1.6",
+    "react-dom": "19.0.0",
+    "react-native-web": "^0.20.0"
+>>>>>>> 82fdeb66611433ed313d7c99d8d81509b0265ae5
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
