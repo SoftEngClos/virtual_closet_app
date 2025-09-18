@@ -11,15 +11,23 @@
     "lint": "eslint . || echo 'No lint configured'"
   },
   "dependencies": {
-    "expo": "~53.0.22",
-    "expo-status-bar": "~2.2.3",
-    "react": "19.0.0",
-    "react-native": "0.79.6"
+    "expo": "^54.0.8",
+    "expo-constants": "~18.0.9",
+    "expo-linking": "~8.0.8",
+    "expo-router": "^6.0.6",
+    "expo-status-bar": "~3.0.8",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.4",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
-    "@types/react": "~19.0.10",
-    "typescript": "~5.8.3"
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "typescript": "~5.9.2"
   },
   "private": true
 }
