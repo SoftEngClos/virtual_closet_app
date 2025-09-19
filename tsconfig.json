@@ -1,7 +1,31 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
+    "target": "esnext",
+    "module": "esnext",
+    "jsx": "react",
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "firebase/auth": [
+        "node_modules/firebase/auth/dist/auth.js"
+      ],
+      "firebase/firestore": [
+        "node_modules/firebase/firestore/dist/firestore.js"
+      ],
+      "firebase/storage": [
+        "node_modules/firebase/storage/dist/storage.js"
+      ]
+    },
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "lib": [
+      "dom",
+      "esnext"
+    ],
+    "noEmit": true
   },
   "include": [
     "**/*.ts",

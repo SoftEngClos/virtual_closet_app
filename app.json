@@ -2,8 +2,23 @@
   "expo": {
     "name": "virtual_closet_app",
     "slug": "virtual_closet_app",
-    "plugins": ["expo-router"],
-    "experiments": { "typedRoutes": true },
+    "scheme": [ "virtual_closet_app" ],
+    "plugins": [
+      "expo-router",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ],
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -15,18 +30,29 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.galaxies.firebase"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
+      "package": "com.galaxies.firebase",
       "edgeToEdgeEnabled": true
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    } 
+    },
+    "extra": {
+      "react-native-safe-module": {
+        "platform": {
+          "auth": {
+            "react-native": "firebase/auth",
+            "web": "firebase/auth/web"
+          }
+        }
+      }
+    }
   }
 }
-
