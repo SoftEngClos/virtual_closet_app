@@ -2,7 +2,7 @@
   "expo": {
     "name": "virtual_closet_app",
     "slug": "virtual_closet_app",
-    "scheme": [ "virtual_closet_app" ],
+    "scheme": [ "virtualclosetapp" ],
     "plugins": [
       "expo-camera",
       "expo-router",
