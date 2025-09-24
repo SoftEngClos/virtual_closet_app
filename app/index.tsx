@@ -13,6 +13,7 @@ import {
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebaseConfig"; // make sure firebaseConfig.ts exists
 import { useRouter } from "expo-router";
+import React from "react";
 
 export default function Index() {
     const [email, setEmail] = useState("");

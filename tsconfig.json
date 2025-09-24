@@ -3,20 +3,10 @@
   "compilerOptions": {
     "target": "esnext",
     "module": "esnext",
-    "jsx": "react",
+    "jsx": "react-jsx",
     "strict": true,
+    "moduleResolution": "bundler",
     "baseUrl": ".",
-    "paths": {
-      "firebase/auth": [
-        "node_modules/firebase/auth/dist/auth.js"
-      ],
-      "firebase/firestore": [
-        "node_modules/firebase/firestore/dist/firestore.js"
-      ],
-      "firebase/storage": [
-        "node_modules/firebase/storage/dist/storage.js"
-      ]
-    },
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "allowSyntheticDefaultImports": true,
@@ -31,6 +21,7 @@
     "**/*.ts",
     "**/*.tsx",
     ".expo/types/**/*.ts",
-    "expo-env.d.ts"
+    "expo-env.d.ts",
+    "firebase-auth-react-native.d.ts"
   ]
 }

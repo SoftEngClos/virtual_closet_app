@@ -4,6 +4,7 @@
     "slug": "virtual_closet_app",
     "scheme": [ "virtual_closet_app" ],
     "plugins": [
+      "expo-camera",
       "expo-router",
       [
         "expo-build-properties",
@@ -31,7 +32,11 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.galaxies.firebase"
+      "bundleIdentifier": "com.galaxies.firebase",
+      "infoPlist": {
+        "NSCameraUsageDescription": "We use the camera to capture your clothing items.",
+        "NSPhotoLibraryAddUsageDescription": "We need access to save your clothing photos."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -39,7 +44,8 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.galaxies.firebase",
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]
     },
     "web": {
       "favicon": "./assets/favicon.png"
