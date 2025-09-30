@@ -1,4 +1,3 @@
-// app/(tabs)/_layout.tsx
 import React from "react";
 import { View, Pressable } from "react-native";
 import { Tabs, router } from "expo-router";
@@ -30,6 +29,15 @@ export default function TabsLayout() {
             ),
           }}
         />
+
+        {/* This placeholder creates the empty space in the middle */}
+        <Tabs.Screen
+          name="placeholder"
+          options={{
+            tabBarButton: () => <View style={{ width: 70 }} />,
+          }}
+        />
+        
         <Tabs.Screen
           name="profile"
           options={{
@@ -38,11 +46,27 @@ export default function TabsLayout() {
             ),
           }}
         />
-        {/* Keep the route, hide it from the tab bar */}
-        <Tabs.Screen name="plus" options={{ href: null }} />
+
+        
+        <Tabs.Screen
+          name="calendar"
+          options={{
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="calendar-outline" size={size} color={color} />
+            ),
+          }}
+        />
+        
+
+        <Tabs.Screen
+          name="plus"
+          options={{
+            href: null,
+          }}
+        />
       </Tabs>
 
-      {/* Floating center “+” */}
+      {/* This floating button now sits in the empty space */}
       <Pressable
         onPress={() => router.push("/(tabs)/plus")}
         style={{
@@ -55,10 +79,6 @@ export default function TabsLayout() {
           backgroundColor: "#111",
           alignItems: "center",
           justifyContent: "center",
-          shadowColor: "#000",
-          shadowOpacity: 0.2,
-          shadowRadius: 6,
-          shadowOffset: { width: 0, height: 3 },
           elevation: 6,
         }}
       >
