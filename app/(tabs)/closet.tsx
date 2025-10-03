@@ -11,8 +11,11 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useCloset } from "../ClosetProvider";
+import {Link} from "expo-router";
 
 const categories = ["Shirts", "Pants", "Shoes", "Accessories"];
+
+
 
 const ClosetScreen = () => {
   const { closet, addItem, removeItem } = useCloset();
