@@ -1,12 +1,14 @@
 import React, { createContext, useState, useContext, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-type ClosetItem = { id: string; uri: string; category: string };
+type ClosetItem = { id: string; uri: string; category: string; tags:string[] };
 
 type ClosetContextType = {
   closet: Record<string, ClosetItem[]>;
   addItem: (item: ClosetItem) => void;
   removeItem: (id: string, category: string) => void;
+  addTag: (id: string, category: string, tag: string) => void;
+  removeTag: (id:string, category:string, tag:string) => void;
 };
 
 const ClosetContext = createContext<ClosetContextType | undefined>(undefined);
@@ -72,8 +74,28 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   };
 
+  const addTag = (id:string , category: string, tag:string) => {
+    const t = tag.trim();
+    if (!t) return;
+    setCloset(prev => ({
+      ...prev,
+      [category]: (prev[category] || []).map(i =>
+        i.id === id ? { ...i, tags: Array.from(new Set([...(i.tags || []), t])) } : i
+      ),
+    }));
+  };
+
+  const removeTag = (id: string, category: string, tag:string) => {
+    setCloset(prev => ({
+      ...prev,
+      [category]: (prev[category] || []).map(i =>
+        i.id === id ? { ...i, tags: (i.tags || []).filter(x => x !== tag) } : i
+      ),
+    }));
+  };
+
   return (
-    <ClosetContext.Provider value={{ closet, addItem, removeItem }}>
+    <ClosetContext.Provider value={{ closet, addItem, removeItem, addTag, removeTag }}>
       {children}
     </ClosetContext.Provider>
   );
