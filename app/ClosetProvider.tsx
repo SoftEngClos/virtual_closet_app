@@ -11,9 +11,14 @@ import {
   getDocs,
   setDoc,
   getDoc,
+  increment,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { onAuthStateChanged, User } from "firebase/auth";
+
+import {
+  getFirestore, serverTimestamp, Timestamp,
+} from "firebase/firestore";
 
 type ClosetItem = {
   id: string;
@@ -49,6 +54,7 @@ type ClosetContextType = {
   renameStorage: (storageId: string, newName: string) => Promise<void>;
   addItemToStorage: (storageId: string, itemId: string, category: string) => Promise<void>;
   removeItemFromStorage: (storageId: string, itemId: string) => Promise<void>;
+  logWearEvent: (outfitId: string, params?: {eventId?: string; feedback?: number; when?: Date}) => Promise<void>;
 };
 
 const ClosetContext = createContext<ClosetContextType | undefined>(undefined);
@@ -367,6 +373,8 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+
+
   // Remove item from storage
   const removeItemFromStorage = async (storageId: string, itemId: string) => {
     if (!user) return;
@@ -384,6 +392,32 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  const db = getFirestore();
+
+  const logWearEvent: ClosetContextType["logWearEvent"] = async (
+    outfitId, 
+    {eventId, feedback, when: whenDate = new Date() } : {eventId?:string; feedback?: number;when?: Date } = {}
+  ) => {
+
+
+    // 1) write wearEvents
+    await addDoc(collection(db, "wearEvents"), {
+      outfitId,
+      date: Timestamp.fromDate(whenDate),
+      eventId: eventId ?? null,
+      feedback: typeof feedback === "number" ? feedback : null,
+      createdAt: serverTimestamp(),
+    });
+
+    // 2) bump outfit usage + lastWorn
+    const ref = doc(db, "outfits", outfitId);
+    await updateDoc(ref, {
+      usageCount: (globalThis as any).firebase?.firestore?.FieldValue?.increment?.(1) ?? 1, // fallback if not using FieldValue
+      lastWorn: Timestamp.fromDate(whenDate),
+      updatedAt: serverTimestamp(),
+    });
+  };
+
   return (
     <ClosetContext.Provider
       value={{
@@ -399,6 +433,7 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
         renameStorage,
         addItemToStorage,
         removeItemFromStorage,
+        logWearEvent,
       }}
     >
       {children}

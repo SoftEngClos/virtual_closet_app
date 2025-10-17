@@ -1,8 +1,12 @@
 // app/(tabs)/calendar/index.tsx
 import React, { useMemo, useState } from "react";
-import { View, Text, Pressable, FlatList, Modal, TextInput, Image, StyleSheet } from "react-native";
+import { View, Text, Pressable, FlatList, Modal, TextInput, Image, StyleSheet, ActivityIndicator } from "react-native";
 import { addMonths, getMonthMatrix, toDateKey } from "../../../lib/date";
 import { useMonthEntries, useOutfits, saveCalendarEntry, clearCalendarEntry } from "../../../hooks/useCalendar";
+
+import { useRecommendations } from "hooks/useRecommendations";
+import { useCloset } from "app/ClosetProvider";
+import RecommendationList from "../../../components/RecommendationList";
 
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -11,12 +15,22 @@ export default function CalendarScreen() {
   const [viewDate, setViewDate] = useState(new Date());
   const monthDays = useMemo(() => getMonthMatrix(viewDate, 0), [viewDate]);
   const entries = useMonthEntries(viewDate);
-  const outfits = useOutfits();
+  const allOutfits = useOutfits();
 
   const [dayModalOpen, setDayModalOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [note, setNote] = useState("");
   const [filter, setFilter] = useState("");
+
+const safeDate = selectedDate ?? new Date();
+const {loading, desiredTags, outfits: recOutfits} = useRecommendations(safeDate, 5);
+const {logWearEvent} = useCloset();
+
+ const dayLabel = useMemo(
+  () => (selectedDate ? selectedDate.toDateString() : ""),
+  [selectedDate]
+ );
+
 
   const visibleMonth = viewDate.toLocaleString(undefined, {
     month: "long",
@@ -32,13 +46,13 @@ export default function CalendarScreen() {
 
   const filteredOutfits = useMemo(() => {
     const f = filter.trim().toLowerCase();
-    if (!f) return outfits;
-    return outfits.filter(
+    if (!f) return allOutfits;
+    return allOutfits.filter(
       (o) =>
         o.name.toLowerCase().includes(f) ||
         (o.tags ?? []).some((t) => t.toLowerCase().includes(f))
     );
-  }, [filter, outfits]);
+  }, [filter, allOutfits]);
 
   return (
     <View style={{ flex: 1, paddingHorizontal: 12, paddingTop: 18 }}>
@@ -111,6 +125,37 @@ export default function CalendarScreen() {
                   onChangeText={setNote}
                   style={styles.input}
                 />
+
+      {/* --- Recommendations block (from calendar → occasion tags) --- */}
+      <View style={{ marginBottom: 10 }}>
+        <Text style={styles.sectionLabel}>Recommended for this day</Text>
+          <Text style={{ color: "#666", marginBottom: 6 }}>
+            Occasion tags: {desiredTags.length ? desiredTags.join(", ") : "—"}
+          </Text>
+
+          {loading ? (
+            <View style={{ paddingVertical: 8 }}>
+              <ActivityIndicator />
+            </View>
+                ) : recOutfits.length ? (
+                  <RecommendationList
+                    outfits={recOutfits}
+                    onWear={async (id) => {
+                      if (!selectedDate) return;
+                      // 1) Log the wear event (improves future recs)
+                      await logWearEvent(id, { when: selectedDate });
+                      // 2) Save to calendar for this day (so the grid shows the dot)
+                      const dk = toDateKey(selectedDate);
+                      await saveCalendarEntry(dk, id, note);
+                      setDayModalOpen(false);
+                    }}
+                  />
+                ) : (
+                  <Text style={{ color: "#666" }}>
+                    No matching saved outfits for these tags.
+                  </Text>
+                )}
+              </View>
 
                 <Text style={styles.sectionLabel}>Pick an outfit</Text>
                 <TextInput
