@@ -3,9 +3,11 @@
 import { Stack } from "expo-router";
 import React from "react";
 import { ClosetProvider } from "./ClosetProvider"; 
+import { UserProvider } from "./UserContext";
 
 export default function RootLayout() {
   return (
+    <UserProvider>
     <ClosetProvider>
       <Stack screenOptions={{ headerShown: false }}>
         {/* Default screen is index (login/signup) */}
@@ -21,5 +23,6 @@ export default function RootLayout() {
         />
       </Stack>
     </ClosetProvider>
+    </UserProvider>
   );
 }

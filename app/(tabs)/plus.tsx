@@ -13,19 +13,17 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import type { CameraCapturedPicture } from "expo-camera";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useCloset } from "../ClosetProvider"; // Import useCloset
+import { useCloset } from "../ClosetProvider";
 
 export default function PlusTab() {
   const cameraRef = useRef<CameraView | null>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [isCapturing, setIsCapturing] = useState(false);
-  
-  // NEW: State to hold the captured photo for preview
   const [capturedPhoto, setCapturedPhoto] = useState<CameraCapturedPicture | null>(null);
-  
-  // NEW: Get closet context to add items and list categories
-  const { closet, addItem } = useCloset();
-  const categories = Object.keys(closet);
+
+  const { addItem } = useCloset();
+
+  const mainCategories = ["Tops", "Bottoms", "Shoes", "Accessories"];
 
   useEffect(() => {
     if (!permission?.granted) requestPermission();
@@ -51,7 +49,6 @@ export default function PlusTab() {
     );
   }
 
-  // MODIFIED: This function now sets the photo for preview instead of navigating
   const takePicture = async () => {
     try {
       if (!cameraRef.current || isCapturing) return;
@@ -61,45 +58,42 @@ export default function PlusTab() {
         quality: 0.8,
         skipProcessing: true,
       });
-      
-      setCapturedPhoto(photo); // Show the preview screen
+
+      setCapturedPhoto(photo);
     } catch (e) {
       Alert.alert("Capture failed", String(e));
     } finally {
       setIsCapturing(false);
     }
   };
-  
-  // NEW: Function to handle saving the item and navigating
+
   const handleSaveItem = (category: string) => {
     if (!capturedPhoto) return;
-    
+
     const newItem = {
       id: Date.now().toString(),
       uri: capturedPhoto.uri,
       category,
     };
 
-    addItem(newItem); // Add item to the closet
-    Alert.alert("Success!", "Your item has been added to the closet.");
-    setCapturedPhoto(null); // Reset the preview state
-    router.replace('/closet'); // Navigate to the closet tab
+    addItem(newItem);
+    Alert.alert("Success!", `Item added to ${category}.`);
+    setCapturedPhoto(null);
+    router.replace("/closet");
   };
-  
-  // NEW: Conditional rendering for the preview screen
+
   if (capturedPhoto) {
     return (
       <ImageBackground source={{ uri: capturedPhoto.uri }} style={styles.previewContainer}>
         <View style={styles.previewOverlay}>
-          {/* Back button to retake photo */}
           <TouchableOpacity style={styles.backButton} onPress={() => setCapturedPhoto(null)}>
             <Ionicons name="arrow-back" size={28} color="white" />
             <Text style={styles.previewHeaderText}>Retake</Text>
           </TouchableOpacity>
-          
-          <Text style={styles.previewTitle}>Add to Category</Text>
+
+          <Text style={styles.previewTitle}>Select Category</Text>
           <ScrollView contentContainerStyle={styles.categoryList}>
-            {categories.map((cat) => (
+            {mainCategories.map((cat) => (
               <TouchableOpacity
                 key={cat}
                 style={styles.categoryButton}
@@ -114,15 +108,9 @@ export default function PlusTab() {
     );
   }
 
-  // This is the original camera view
   return (
     <View style={styles.container}>
-      <CameraView
-        ref={cameraRef}
-        style={styles.camera}
-        facing="back"
-        ratio="16:9"
-      />
+      <CameraView ref={cameraRef} style={styles.camera} facing="back" ratio="16:9" />
       <View style={styles.controls}>
         <TouchableOpacity onPress={takePicture} style={styles.shutter} disabled={isCapturing}>
           <View style={[styles.innerShutter, isCapturing && { opacity: 0.5 }]} />
@@ -132,7 +120,6 @@ export default function PlusTab() {
   );
 }
 
-// MODIFIED: Added new styles for the preview screen
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "black" },
   camera: { flex: 1 },
@@ -144,61 +131,69 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   shutter: {
-    width: 78, height: 78, borderRadius: 39,
-    borderWidth: 4, borderColor: "white",
-    alignItems: "center", justifyContent: "center",
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    borderWidth: 4,
+    borderColor: "white",
+    alignItems: "center",
+    justifyContent: "center",
   },
   innerShutter: { width: 60, height: 60, borderRadius: 30, backgroundColor: "white" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   text: { color: "white", fontSize: 16, marginBottom: 12, textAlign: "center" },
-  permBtn: { backgroundColor: "white", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8 },
+  permBtn: {
+    backgroundColor: "white",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
   permText: { fontWeight: "600" },
-  // Styles for the preview screen
   previewContainer: {
     flex: 1,
-    justifyContent: 'flex-end',
+    justifyContent: "flex-end",
   },
   previewOverlay: {
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: "rgba(0,0,0,0.6)",
     paddingBottom: 40,
     paddingTop: 60,
   },
   previewTitle: {
     fontSize: 22,
-    fontWeight: 'bold',
-    color: 'white',
-    textAlign: 'center',
+    fontWeight: "bold",
+    color: "white",
+    textAlign: "center",
     marginBottom: 20,
   },
   categoryList: {
-    alignItems: 'center',
+    alignItems: "center",
     paddingHorizontal: 20,
   },
   categoryButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
     paddingVertical: 15,
     borderRadius: 12,
     marginBottom: 12,
-    width: '90%',
-    alignItems: 'center',
+    width: "90%",
+    alignItems: "center",
   },
   categoryButtonText: {
     fontSize: 18,
-    fontWeight: '500',
-    color: '#333',
+    fontWeight: "500",
+    color: "#333",
   },
   backButton: {
-    position: 'absolute',
+    position: "absolute",
     top: 50,
     left: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     padding: 10,
   },
   previewHeaderText: {
-    color: 'white',
+    color: "white",
     fontSize: 18,
     marginLeft: 8,
-    fontWeight: '600',
+    fontWeight: "600",
   },
 });
