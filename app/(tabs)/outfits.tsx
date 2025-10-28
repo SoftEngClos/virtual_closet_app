@@ -27,7 +27,7 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 
-type OutfitItem = { category: string; uri: string };
+type OutfitItem = { category: string; uri: string; slotIndex: number };
 type SavedOutfit = { id: string; outfit: OutfitItem[]; category: string };
 type OutfitCategories = Record<string, SavedOutfit[]>;
 type Slot = { category: string | null; index: number };
@@ -40,7 +40,7 @@ export default function OutfitsScreen() {
 
   const [user, setUser] = useState<any>(null);
   const [slots, setSlots] = useState<Slot[]>(
-    Array(5).fill({ category: null, index: 0 })
+    Array(5).fill(null).map(() => ({ category: null, index: 0 }))
   );
   const [savedOutfits, setSavedOutfits] = useState<OutfitCategories>({});
   const [showLibrary, setShowLibrary] = useState(false);
@@ -88,6 +88,8 @@ export default function OutfitsScreen() {
     }
     
     try {
+      console.log("Saving outfit with slot positions:", outfit);
+      
       await addDoc(collection(db, "outfits"), {
         uid: user.uid,
         category,
@@ -144,16 +146,23 @@ export default function OutfitsScreen() {
   };
 
   const saveOutfit = () => {
-    const currentOutfitItems = slots
-      .filter((s) => s.category && closet[s.category]?.length)
-      .map((slot) => ({
-        category: slot.category!,
-        uri: closet[slot.category!][slot.index].uri,
-      }));
+    const currentOutfitItems: OutfitItem[] = [];
+    
+    slots.forEach((slot, slotIndex) => {
+      if (slot.category && closet[slot.category]?.length) {
+        currentOutfitItems.push({
+          category: slot.category,
+          uri: closet[slot.category][slot.index].uri,
+          slotIndex: slotIndex,
+        });
+      }
+    });
 
     if (currentOutfitItems.length === 0) {
       return Alert.alert("Empty Outfit", "Please add items to save an outfit.");
     }
+
+    console.log("Current outfit items with slots:", currentOutfitItems);
 
     setSelectedExistingCategory(null);
     setCustomCategoryName("");
@@ -168,12 +177,17 @@ export default function OutfitsScreen() {
       return;
     }
 
-    const outfitItems = slots
-      .filter((s) => s.category && closet[s.category]?.length)
-      .map((slot) => ({
-        category: slot.category!,
-        uri: closet[slot.category!][slot.index].uri,
-      }));
+    const outfitItems: OutfitItem[] = [];
+    
+    slots.forEach((slot, slotIndex) => {
+      if (slot.category && closet[slot.category]?.length) {
+        outfitItems.push({
+          category: slot.category,
+          uri: closet[slot.category][slot.index].uri,
+          slotIndex: slotIndex,
+        });
+      }
+    });
 
     await addOutfitToCategory(outfitItems, category);
     setSaveModalOpen(false);
@@ -268,23 +282,36 @@ export default function OutfitsScreen() {
   };
 
   const loadOutfitToModel = (outfit: SavedOutfit) => {
+    console.log("Loading outfit:", outfit.outfit);
+    
+    // Initialize all slots as empty
     const newSlots: Slot[] = Array(5)
       .fill(null)
       .map(() => ({ category: null, index: 0 }));
     
-    outfit.outfit.forEach((piece, i) => {
-      if (i < newSlots.length) {
+    // Place each item in its saved slot position
+    outfit.outfit.forEach((piece, pieceIndex) => {
+      // Use slotIndex if available, otherwise fall back to pieceIndex for old outfits
+      const targetSlot = piece.slotIndex !== undefined ? piece.slotIndex : pieceIndex;
+      
+      console.log(`Placing ${piece.category} in slot ${targetSlot}`);
+      
+      if (targetSlot >= 0 && targetSlot < 5) {
         const items = closet[piece.category];
         if (items && items.length > 0) {
-          const index = items.findIndex((it) => it.uri === piece.uri);
-          newSlots[i] = { 
+          const itemIndex = items.findIndex((it) => it.uri === piece.uri);
+          newSlots[targetSlot] = { 
             category: piece.category, 
-            index: index >= 0 ? index : 0 
+            index: itemIndex >= 0 ? itemIndex : 0 
           };
+          console.log(`Successfully placed ${piece.category} at slot ${targetSlot}`);
+        } else {
+          console.log(`No items found for category ${piece.category}`);
         }
       }
     });
     
+    console.log("Final slots:", newSlots);
     setSlots(newSlots);
     setShowLibrary(false);
     Alert.alert("Outfit Loaded", "Your outfit has been loaded to the builder!");
@@ -535,6 +562,7 @@ export default function OutfitsScreen() {
   );
 }
 
+// ... rest of the styles remain the same
 const styles = StyleSheet.create({
   container: { 
     flex: 1, 

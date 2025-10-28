@@ -8,6 +8,7 @@ import {
   Alert,
   ImageBackground,
   ScrollView,
+  StatusBar,
 } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import type { CameraCapturedPicture } from "expo-camera";
@@ -20,8 +21,9 @@ export default function PlusTab() {
   const [permission, requestPermission] = useCameraPermissions();
   const [isCapturing, setIsCapturing] = useState(false);
   const [capturedPhoto, setCapturedPhoto] = useState<CameraCapturedPicture | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
 
-  const { addItem } = useCloset();
+  const { addItem, uploadImageToStorage } = useCloset();
 
   const mainCategories = ["Tops", "Bottoms", "Shoes", "Accessories"];
 
@@ -33,7 +35,7 @@ export default function PlusTab() {
     return (
       <View style={styles.center}>
         <ActivityIndicator />
-        <Text>Checking camera permission…</Text>
+        <Text style={styles.loadingText}>Checking camera permission…</Text>
       </View>
     );
   }
@@ -56,9 +58,10 @@ export default function PlusTab() {
 
       const photo: CameraCapturedPicture = await cameraRef.current.takePictureAsync({
         quality: 0.8,
-        skipProcessing: true,
+        skipProcessing: false,
       });
 
+      console.log("Photo captured:", photo.uri);
       setCapturedPhoto(photo);
     } catch (e) {
       Alert.alert("Capture failed", String(e));
@@ -67,50 +70,112 @@ export default function PlusTab() {
     }
   };
 
-  const handleSaveItem = (category: string) => {
-    if (!capturedPhoto) return;
+  const handleSaveItem = async (category: string) => {
+    if (!capturedPhoto || isUploading) return;
 
-    const newItem = {
-      id: Date.now().toString(),
-      uri: capturedPhoto.uri,
-      category,
-    };
+    setIsUploading(true);
 
-    addItem(newItem);
-    Alert.alert("Success!", `Item added to ${category}.`);
+    try {
+      console.log("Starting upload process...");
+      console.log("Local URI:", capturedPhoto.uri);
+
+      // Upload to Firebase Storage first
+      const downloadURL = await uploadImageToStorage(
+        capturedPhoto.uri,
+        category
+      );
+
+      console.log("Upload complete, download URL:", downloadURL);
+
+      // Now save with the Firebase URL instead of local URI
+      await addItem({
+        uri: downloadURL,
+        category,
+        tags: [],
+      });
+
+      Alert.alert("Success!", `Item added to ${category}.`);
+      setCapturedPhoto(null);
+      router.replace("/closet");
+    } catch (error: any) {
+      console.error("Error saving item:", error);
+      Alert.alert(
+        "Upload Failed",
+        error.message || "Failed to upload image. Please try again."
+      );
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleClose = () => {
     setCapturedPhoto(null);
-    router.replace("/closet");
+    router.back();
   };
 
   if (capturedPhoto) {
     return (
-      <ImageBackground source={{ uri: capturedPhoto.uri }} style={styles.previewContainer}>
-        <View style={styles.previewOverlay}>
-          <TouchableOpacity style={styles.backButton} onPress={() => setCapturedPhoto(null)}>
-            <Ionicons name="arrow-back" size={28} color="white" />
-            <Text style={styles.previewHeaderText}>Retake</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.previewTitle}>Select Category</Text>
-          <ScrollView contentContainerStyle={styles.categoryList}>
-            {mainCategories.map((cat) => (
-              <TouchableOpacity
-                key={cat}
-                style={styles.categoryButton}
-                onPress={() => handleSaveItem(cat)}
+      <View style={styles.fullscreenContainer}>
+        <StatusBar hidden />
+        <ImageBackground source={{ uri: capturedPhoto.uri }} style={styles.previewContainer}>
+          <View style={styles.previewOverlay}>
+            {!isUploading && (
+              <TouchableOpacity 
+                style={styles.backButton} 
+                onPress={() => setCapturedPhoto(null)}
               >
-                <Text style={styles.categoryButtonText}>{cat}</Text>
+                <Ionicons name="arrow-back" size={28} color="white" />
+                <Text style={styles.previewHeaderText}>Retake</Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      </ImageBackground>
+            )}
+
+            {!isUploading && (
+              <TouchableOpacity 
+                style={styles.closeButton} 
+                onPress={handleClose}
+              >
+                <Ionicons name="close" size={32} color="white" />
+              </TouchableOpacity>
+            )}
+
+            {isUploading ? (
+              <View style={styles.uploadingContainer}>
+                <ActivityIndicator size="large" color="white" />
+                <Text style={styles.uploadingText}>Uploading to cloud...</Text>
+                <Text style={styles.uploadingSubtext}>Please wait</Text>
+              </View>
+            ) : (
+              <>
+                <Text style={styles.previewTitle}>Select Category</Text>
+                <ScrollView contentContainerStyle={styles.categoryList}>
+                  {mainCategories.map((cat) => (
+                    <TouchableOpacity
+                      key={cat}
+                      style={styles.categoryButton}
+                      onPress={() => handleSaveItem(cat)}
+                    >
+                      <Text style={styles.categoryButtonText}>{cat}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </>
+            )}
+          </View>
+        </ImageBackground>
+      </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <CameraView ref={cameraRef} style={styles.camera} facing="back" ratio="16:9" />
+    <View style={styles.fullscreenContainer}>
+      <StatusBar hidden />
+      <CameraView ref={cameraRef} style={styles.camera} facing="back" />
+      
+      {/* Close button on camera view */}
+      <TouchableOpacity style={styles.cameraCloseButton} onPress={handleClose}>
+        <Ionicons name="close" size={32} color="white" />
+      </TouchableOpacity>
+
       <View style={styles.controls}>
         <TouchableOpacity onPress={takePicture} style={styles.shutter} disabled={isCapturing}>
           <View style={[styles.innerShutter, isCapturing && { opacity: 0.5 }]} />
@@ -121,11 +186,27 @@ export default function PlusTab() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "black" },
-  camera: { flex: 1 },
+  fullscreenContainer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "black",
+    zIndex: 9999,
+  },
+  container: { 
+    flex: 1, 
+    backgroundColor: "black" 
+  },
+  camera: { 
+    flex: 1,
+    width: "100%",
+    height: "100%",
+  },
   controls: {
     position: "absolute",
-    bottom: 32,
+    bottom: 40,
     width: "100%",
     alignItems: "center",
     justifyContent: "center",
@@ -139,48 +220,78 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  innerShutter: { width: 60, height: 60, borderRadius: 30, backgroundColor: "white" },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
-  text: { color: "white", fontSize: 16, marginBottom: 12, textAlign: "center" },
+  innerShutter: { 
+    width: 60, 
+    height: 60, 
+    borderRadius: 30, 
+    backgroundColor: "white" 
+  },
+  center: { 
+    flex: 1, 
+    alignItems: "center", 
+    justifyContent: "center", 
+    padding: 24,
+    backgroundColor: "black",
+  },
+  text: { 
+    color: "white", 
+    fontSize: 16, 
+    marginBottom: 12, 
+    textAlign: "center" 
+  },
+  loadingText: {
+    color: "white",
+    fontSize: 16,
+    marginTop: 12,
+  },
   permBtn: {
     backgroundColor: "white",
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 8,
   },
-  permText: { fontWeight: "600" },
+  permText: { 
+    fontWeight: "600" 
+  },
   previewContainer: {
     flex: 1,
     justifyContent: "flex-end",
   },
   previewOverlay: {
-    backgroundColor: "rgba(0,0,0,0.6)",
-    paddingBottom: 40,
-    paddingTop: 60,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    paddingBottom: 50,
+    paddingTop: 80,
+    minHeight: 400,
   },
   previewTitle: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: "bold",
     color: "white",
     textAlign: "center",
-    marginBottom: 20,
+    marginBottom: 24,
   },
   categoryList: {
     alignItems: "center",
     paddingHorizontal: 20,
+    paddingBottom: 20,
   },
   categoryButton: {
-    backgroundColor: "rgba(255, 255, 255, 0.9)",
-    paddingVertical: 15,
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
+    paddingVertical: 16,
     borderRadius: 12,
     marginBottom: 12,
     width: "90%",
     alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
   categoryButtonText: {
     fontSize: 18,
-    fontWeight: "500",
-    color: "#333",
+    fontWeight: "600",
+    color: "#1a1a1a",
   },
   backButton: {
     position: "absolute",
@@ -189,11 +300,49 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     padding: 10,
+    zIndex: 10,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    borderRadius: 20,
+  },
+  closeButton: {
+    position: "absolute",
+    top: 50,
+    right: 20,
+    padding: 10,
+    zIndex: 10,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    borderRadius: 20,
+  },
+  cameraCloseButton: {
+    position: "absolute",
+    top: 50,
+    right: 20,
+    padding: 10,
+    zIndex: 10,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    borderRadius: 20,
   },
   previewHeaderText: {
     color: "white",
     fontSize: 18,
     marginLeft: 8,
     fontWeight: "600",
+  },
+  uploadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 80,
+  },
+  uploadingText: {
+    color: "white",
+    fontSize: 22,
+    fontWeight: "700",
+    marginTop: 24,
+  },
+  uploadingSubtext: {
+    color: "rgba(255,255,255,0.8)",
+    fontSize: 16,
+    marginTop: 8,
   },
 });
