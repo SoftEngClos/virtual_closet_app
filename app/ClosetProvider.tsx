@@ -12,7 +12,7 @@ import {
   setDoc,
   getDoc,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { onAuthStateChanged, User } from "firebase/auth";
 
 type ClosetItem = {
@@ -20,6 +20,8 @@ type ClosetItem = {
   uri: string;
   category: string;
   tags: string[];
+  brand?: string;
+  price?: number;
   uid?: string;
   createdAt?: string;
 };
@@ -43,6 +45,7 @@ type ClosetContextType = {
   removeItem: (id: string, category: string) => Promise<void>;
   addTag: (id: string, category: string, tag: string) => Promise<void>;
   removeTag: (id: string, category: string, tag: string) => Promise<void>;
+  updateItemDetails: (id: string, category: string, details: { brand?: string; price?: number }) => Promise<void>;
   uploadImageToStorage: (uri: string, category: string) => Promise<string>;
   addStorage: (name: string) => Promise<void>;
   deleteStorage: (storageId: string) => Promise<void>;
@@ -66,7 +69,6 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
   const [storages, setStorages] = useState<Storage[]>([]);
   const [user, setUser] = useState<User | null>(null);
 
-  // Listen for auth changes and load user's data
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -88,7 +90,6 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     return () => unsubscribe();
   }, []);
 
-  // Load user's closet items from Firestore
   const loadUserCloset = async (userId: string) => {
     try {
       const q = query(
@@ -111,6 +112,8 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
           uri: data.uri,
           category: data.category,
           tags: data.tags || [],
+          brand: data.brand,
+          price: data.price,
           uid: data.uid,
           createdAt: data.createdAt,
         };
@@ -126,7 +129,6 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Load user's storages from Firestore
   const loadUserStorages = async (userId: string) => {
     try {
       const docRef = doc(db, "storages", userId);
@@ -136,7 +138,6 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
         const data = docSnap.data();
         setStorages(data.storages || [{ id: "1", name: "Storage", items: [] }]);
       } else {
-        // Create default storage for new users
         const defaultStorages = [{ id: "1", name: "Storage", items: [] }];
         await setDoc(docRef, { storages: defaultStorages });
         setStorages(defaultStorages);
@@ -146,7 +147,6 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Save storages to Firestore
   const saveStorages = async (newStorages: Storage[]) => {
     if (!user) return;
 
@@ -160,7 +160,25 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Upload image to Firebase Storage using fetch
+  const deleteImageFromStorage = async (imageUrl: string) => {
+    if (!imageUrl) return;
+    
+    try {
+      console.log("Attempting to delete image:", imageUrl);
+      
+      const imageRef = ref(storage, imageUrl);
+      await deleteObject(imageRef);
+      
+      console.log("✅ Image deleted from Firebase Storage:", imageUrl);
+    } catch (error: any) {
+      console.error("Error deleting image from storage:", error);
+      
+      if (error.code !== 'storage/object-not-found') {
+        console.error("Failed to delete, but continuing...");
+      }
+    }
+  };
+
   const uploadImageToStorage = async (
     uri: string,
     category: string
@@ -173,26 +191,40 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
       const response = await fetch(uri);
       
       if (!response.ok) {
-        throw new Error(`Failed to fetch image: ${response.status}`);
+        throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
       }
 
       const blob = await response.blob();
-      console.log("Blob created:", blob.type, blob.size);
+      console.log("Blob created:", {
+        type: blob.type,
+        size: blob.size,
+      });
 
-      const filename = `${Date.now()}_${category}.jpg`;
+      if (!blob || blob.size === 0) {
+        throw new Error("Invalid image blob - size is 0");
+      }
+
+      const timestamp = Date.now();
+      const extension = blob.type ? blob.type.split('/')[1] : 'jpg';
+      const filename = `${timestamp}_${category}.${extension}`;
       const storagePath = `users/${user.uid}/closet/${category}/${filename}`;
       const storageRef = ref(storage, storagePath);
 
       console.log("Uploading to:", storagePath);
 
-      const snapshot = await uploadBytes(storageRef, blob, {
-        contentType: 'image/jpeg',
-      });
+      const metadata = {
+        contentType: blob.type || 'image/jpeg',
+        customMetadata: {
+          uploadedAt: new Date().toISOString(),
+          category: category,
+        }
+      };
 
+      const snapshot = await uploadBytes(storageRef, blob, metadata);
       console.log("Upload successful!");
 
       const downloadURL = await getDownloadURL(snapshot.ref);
-      console.log("Download URL:", downloadURL);
+      console.log("Download URL obtained:", downloadURL);
 
       return downloadURL;
     } catch (error: any) {
@@ -201,7 +233,6 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Add item to Firestore
   const addItem = async (item: Omit<ClosetItem, "id">) => {
     if (!user) {
       console.error("No user logged in");
@@ -213,6 +244,8 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
         uri: item.uri,
         category: item.category,
         tags: item.tags || [],
+        brand: item.brand || null,
+        price: item.price || null,
         uid: user.uid,
         createdAt: new Date().toISOString(),
       };
@@ -222,6 +255,8 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
       const newItem: ClosetItem = {
         id: docRef.id,
         ...itemData,
+        brand: itemData.brand || undefined,
+        price: itemData.price || undefined,
       };
 
       setCloset((prev) => ({
@@ -234,24 +269,36 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Remove item from Firestore
   const removeItem = async (id: string, category: string) => {
     if (!user) return;
 
     try {
+      console.log(`Attempting to delete item ${id} from category ${category}`);
+      
+      const item = closet[category]?.find((i) => i.id === id);
+      
+      if (item) {
+        console.log("Item found, deleting image:", item.uri);
+        await deleteImageFromStorage(item.uri);
+      } else {
+        console.warn("Item not found in local state");
+      }
+
       await deleteDoc(doc(db, "closet", id));
+      console.log("✅ Firestore document deleted");
 
       setCloset((prev) => ({
         ...prev,
         [category]: (prev[category] || []).filter((i) => i.id !== id),
       }));
+      
+      console.log("✅ Item successfully deleted from Firestore and Firebase Storage");
     } catch (error) {
-      console.error("Error removing item:", error);
+      console.error("❌ Error removing item:", error);
       throw error;
     }
   };
 
-  // Add tag to item
   const addTag = async (id: string, category: string, tag: string) => {
     if (!user) return;
 
@@ -274,7 +321,6 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Remove tag from item
   const removeTag = async (id: string, category: string, tag: string) => {
     if (!user) return;
 
@@ -297,7 +343,34 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Add new storage
+  const updateItemDetails = async (
+    id: string,
+    category: string,
+    details: { brand?: string; price?: number }
+  ) => {
+    if (!user) return;
+
+    try {
+      const item = closet[category]?.find((i) => i.id === id);
+      if (!item) return;
+
+      await updateDoc(doc(db, "closet", id), {
+        brand: details.brand || null,
+        price: details.price || null,
+      });
+
+      setCloset((prev) => ({
+        ...prev,
+        [category]: (prev[category] || []).map((i) =>
+          i.id === id ? { ...i, brand: details.brand, price: details.price } : i
+        ),
+      }));
+    } catch (error) {
+      console.error("Error updating item details:", error);
+      throw error;
+    }
+  };
+
   const addStorage = async (name: string) => {
     if (!user) return;
 
@@ -316,20 +389,53 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Delete storage
   const deleteStorage = async (storageId: string) => {
     if (!user) return;
 
     try {
+      console.log(`Deleting storage ${storageId}`);
+      
+      const storageToDelete = storages.find((s) => s.id === storageId);
+      
+      if (storageToDelete && storageToDelete.items.length > 0) {
+        console.log(`Storage contains ${storageToDelete.items.length} items, deleting all...`);
+        
+        const deletePromises = storageToDelete.items.map(async (storedItem) => {
+          const item = closet[storedItem.category]?.find(
+            (i) => i.id === storedItem.itemId
+          );
+          if (item) {
+            console.log(`Deleting item ${storedItem.itemId} and its image`);
+            await deleteImageFromStorage(item.uri);
+            await deleteDoc(doc(db, "closet", storedItem.itemId));
+          }
+        });
+        
+        await Promise.all(deletePromises);
+        
+        setCloset((prev) => {
+          const newCloset = { ...prev };
+          storageToDelete.items.forEach((storedItem) => {
+            newCloset[storedItem.category] = newCloset[storedItem.category]?.filter(
+              (item) => item.id !== storedItem.itemId
+            ) || [];
+          });
+          return newCloset;
+        });
+        
+        console.log("✅ All items deleted from storage");
+      }
+
       const updatedStorages = storages.filter((s) => s.id !== storageId);
       await saveStorages(updatedStorages);
+      
+      console.log("✅ Storage successfully deleted");
     } catch (error) {
-      console.error("Error deleting storage:", error);
+      console.error("❌ Error deleting storage:", error);
       throw error;
     }
   };
 
-  // Rename storage
   const renameStorage = async (storageId: string, newName: string) => {
     if (!user) return;
 
@@ -344,7 +450,6 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Add item to storage
   const addItemToStorage = async (storageId: string, itemId: string, category: string) => {
     if (!user) return;
 
@@ -367,7 +472,6 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Remove item from storage
   const removeItemFromStorage = async (storageId: string, itemId: string) => {
     if (!user) return;
 
@@ -393,6 +497,7 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
         removeItem,
         addTag,
         removeTag,
+        updateItemDetails,
         uploadImageToStorage,
         addStorage,
         deleteStorage,
