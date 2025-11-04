@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,9 @@ import {
   Modal,
   TextInput,
   ScrollView,
+  Animated,
+  PanResponder,
+  Dimensions,
 } from "react-native";
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from "@expo/vector-icons";
@@ -27,10 +30,80 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
 type OutfitItem = { category: string; uri: string; slotIndex: number };
 type SavedOutfit = { id: string; outfit: OutfitItem[]; category: string };
 type OutfitCategories = Record<string, SavedOutfit[]>;
 type Slot = { category: string | null; index: number };
+
+type CollageItem = {
+  id: string;
+  uri: string;
+  category: string;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+};
+
+// Draggable Item Component
+const DraggableItem = ({ item, onUpdate, onRemove }: any) => {
+  const position = useRef(new Animated.ValueXY({ x: item.x, y: item.y })).current;
+  const [isDragging, setIsDragging] = useState(false);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        setIsDragging(true);
+        position.setOffset({
+          x: position.x._value,
+          y: position.y._value,
+        });
+        position.setValue({ x: 0, y: 0 });
+      },
+      onPanResponderMove: Animated.event(
+        [null, { dx: position.x, dy: position.y }],
+        { useNativeDriver: false }
+      ),
+      onPanResponderRelease: () => {
+        setIsDragging(false);
+        position.flattenOffset();
+        onUpdate(item.id, {
+          x: position.x._value,
+          y: position.y._value,
+        });
+      },
+    })
+  ).current;
+
+  return (
+    <Animated.View
+      style={[
+        styles.draggableItem,
+        {
+          transform: [
+            ...position.getTranslateTransform(),
+            { scale: item.scale },
+            { rotate: `${item.rotation}deg` },
+          ],
+          opacity: isDragging ? 0.8 : 1,
+          zIndex: isDragging ? 1000 : 1,
+        },
+      ]}
+      {...panResponder.panHandlers}
+    >
+      <TouchableOpacity
+        onLongPress={() => onRemove(item.id)}
+        style={styles.draggableImageContainer}
+      >
+        <Image source={{ uri: item.uri }} style={styles.draggableImage} />
+      </TouchableOpacity>
+    </Animated.View>
+  );
+};
 
 export default function OutfitsScreen() {
   const { closet } = useCloset();
@@ -48,6 +121,11 @@ export default function OutfitsScreen() {
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [customCategoryName, setCustomCategoryName] = useState("");
   const [selectedExistingCategory, setSelectedExistingCategory] = useState<string | null>(null);
+
+  // Collage mode states
+  const [isCollageMode, setIsCollageMode] = useState(false);
+  const [collageItems, setCollageItems] = useState<CollageItem[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (firebaseUser) => {
@@ -146,17 +224,27 @@ export default function OutfitsScreen() {
   };
 
   const saveOutfit = () => {
-    const currentOutfitItems: OutfitItem[] = [];
+    let currentOutfitItems: OutfitItem[] = [];
     
-    slots.forEach((slot, slotIndex) => {
-      if (slot.category && closet[slot.category]?.length) {
-        currentOutfitItems.push({
-          category: slot.category,
-          uri: closet[slot.category][slot.index].uri,
-          slotIndex: slotIndex,
-        });
-      }
-    });
+    if (isCollageMode) {
+      // Save collage items
+      currentOutfitItems = collageItems.map((item, index) => ({
+        category: item.category,
+        uri: item.uri,
+        slotIndex: index,
+      }));
+    } else {
+      // Save model items
+      slots.forEach((slot, slotIndex) => {
+        if (slot.category && closet[slot.category]?.length) {
+          currentOutfitItems.push({
+            category: slot.category,
+            uri: closet[slot.category][slot.index].uri,
+            slotIndex: slotIndex,
+          });
+        }
+      });
+    }
 
     if (currentOutfitItems.length === 0) {
       return Alert.alert("Empty Outfit", "Please add items to save an outfit.");
@@ -177,17 +265,25 @@ export default function OutfitsScreen() {
       return;
     }
 
-    const outfitItems: OutfitItem[] = [];
+    let outfitItems: OutfitItem[] = [];
     
-    slots.forEach((slot, slotIndex) => {
-      if (slot.category && closet[slot.category]?.length) {
-        outfitItems.push({
-          category: slot.category,
-          uri: closet[slot.category][slot.index].uri,
-          slotIndex: slotIndex,
-        });
-      }
-    });
+    if (isCollageMode) {
+      outfitItems = collageItems.map((item, index) => ({
+        category: item.category,
+        uri: item.uri,
+        slotIndex: index,
+      }));
+    } else {
+      slots.forEach((slot, slotIndex) => {
+        if (slot.category && closet[slot.category]?.length) {
+          outfitItems.push({
+            category: slot.category,
+            uri: closet[slot.category][slot.index].uri,
+            slotIndex: slotIndex,
+          });
+        }
+      });
+    }
 
     await addOutfitToCategory(outfitItems, category);
     setSaveModalOpen(false);
@@ -289,12 +385,8 @@ export default function OutfitsScreen() {
       .fill(null)
       .map(() => ({ category: null, index: 0 }));
     
-    // Place each item in its saved slot position
     outfit.outfit.forEach((piece, pieceIndex) => {
-      // Use slotIndex if available, otherwise fall back to pieceIndex for old outfits
       const targetSlot = piece.slotIndex !== undefined ? piece.slotIndex : pieceIndex;
-      
-      console.log(`Placing ${piece.category} in slot ${targetSlot}`);
       
       if (targetSlot >= 0 && targetSlot < 5) {
         const items = closet[piece.category];
@@ -314,6 +406,7 @@ export default function OutfitsScreen() {
     console.log("Final slots:", newSlots);
     setSlots(newSlots);
     setShowLibrary(false);
+    setIsCollageMode(false);
     Alert.alert("Outfit Loaded", "Your outfit has been loaded to the builder!");
   };
 
@@ -323,7 +416,94 @@ export default function OutfitsScreen() {
       {
         text: "Clear",
         style: "destructive",
-        onPress: () => setSlots(Array(5).fill(null).map(() => ({ category: null, index: 0 }))),
+        onPress: () => {
+          if (isCollageMode) {
+            setCollageItems([]);
+          } else {
+            setSlots(Array(5).fill(null).map(() => ({ category: null, index: 0 })));
+          }
+        },
+      },
+    ]);
+  };
+
+  const randomizeOutfit = () => {
+    if (allClosetCategories.length === 0) {
+      Alert.alert("No Items", "Add items to your closet first!");
+      return;
+    }
+
+    if (isCollageMode) {
+      // Randomize collage items
+      const newItems = collageItems.map(item => {
+        const items = closet[item.category];
+        if (items && items.length > 0) {
+          const randomItem = items[Math.floor(Math.random() * items.length)];
+          return {
+            ...item,
+            uri: randomItem.uri,
+          };
+        }
+        return item;
+      });
+      setCollageItems(newItems);
+    } else {
+      // Randomize model slots
+      const newSlots: Slot[] = Array(5).fill(null).map(() => ({ category: null, index: 0 }));
+
+      slots.forEach((slot, i) => {
+        if (slot.category && closet[slot.category]?.length > 0) {
+          const items = closet[slot.category];
+          const randomIndex = Math.floor(Math.random() * items.length);
+          newSlots[i] = { category: slot.category, index: randomIndex };
+        }
+      });
+
+      const hasCategories = newSlots.some(slot => slot.category !== null);
+      
+      if (!hasCategories) {
+        Alert.alert("No Categories", "Please add categories to slots first, then randomize!");
+        return;
+      }
+
+      setSlots(newSlots);
+    }
+  };
+
+  const toggleMode = () => {
+    setIsCollageMode(!isCollageMode);
+    setSelectedCategory(null);
+  };
+
+  // Collage mode functions
+  const addCollageItem = (item: any) => {
+    const newItem: CollageItem = {
+      id: `${Date.now()}_${Math.random()}`,
+      uri: item.uri,
+      category: selectedCategory || "Unknown",
+      x: Math.random() * (SCREEN_WIDTH - 200) + 50,
+      y: Math.random() * 400 + 100,
+      scale: 1,
+      rotation: 0,
+    };
+    setCollageItems([...collageItems, newItem]);
+  };
+
+  const updateCollageItem = (id: string, updates: any) => {
+    setCollageItems(items =>
+      items.map(item => (item.id === id ? { ...item, ...updates } : item))
+    );
+  };
+
+  const removeCollageItem = (id: string) => {
+    Alert.alert("Remove Item", "Remove this item from the collage?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: () => {
+          setCollageItems(items => items.filter(item => item.id !== id));
+        },
       },
     ]);
   };
@@ -331,7 +511,7 @@ export default function OutfitsScreen() {
   const existingCategories = Object.keys(savedOutfits);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       {showLibrary ? (
         <>
           <View style={styles.headerRow}>
@@ -409,74 +589,168 @@ export default function OutfitsScreen() {
         </>
       ) : (
         <View style={styles.builderWrapper}>
-          <View style={styles.builderHeader}>
-            <Text style={styles.builderTitle}>Outfit Builder</Text>
-            <TouchableOpacity onPress={clearOutfit}>
-              <Text style={styles.clearText}>Clear</Text>
+          {/* Header with toggle */}
+          <View style={styles.simpleHeader}>
+            <Text style={styles.simpleHeaderTitle}>Outfit Builder</Text>
+            <TouchableOpacity onPress={toggleMode} style={styles.toggleButton}>
+              <Ionicons 
+                name={isCollageMode ? "grid-outline" : "images-outline"} 
+                size={24} 
+                color="#1a1a1a" 
+              />
+              <Text style={styles.toggleText}>
+                {isCollageMode ? "Model" : "Collage"}
+              </Text>
             </TouchableOpacity>
           </View>
 
-          <ScrollView 
-            contentContainerStyle={styles.builderContent}
-            showsVerticalScrollIndicator={false}
-          >
-            <View style={styles.modelContainer}>
-              <View style={styles.modelBody} />
-              {slots.map((slot, i) => {
-                if (!slot.category) {
-                  return (
-                    <Pressable
-                      key={i}
-                      style={[
-                        i === 0 ? styles.facePlusButton : styles.plusButton, 
-                        { top: 140 * i + 40 }
-                      ]}
-                      onPress={() =>
-                        i === 0 ? pickFaceImage() : pickCategory(i)
-                      }
-                    >
-                      <Ionicons name="add" size={i === 0 ? 40 : 32} color="#fff" />
-                    </Pressable>
-                  );
-                }
-                const items = closet[slot.category];
-                if (!items?.length) return null;
-                const currentItem = items[slot.index];
-                if (!currentItem) return null;
-                
-                return (
-                  <View
-                    key={i}
-                    style={[styles.slotContainer, { top: 140 * i + 40 }]}
-                  >
-                    <Pressable onPress={() => prevItem(i)}>
-                      <Ionicons name="chevron-back-circle" size={40} color="#1a1a1a" />
-                    </Pressable>
-                    <Pressable onLongPress={() => handleSlotLongPress(i)}>
-                      <Image
-                        source={{ uri: currentItem.uri }}
-                        style={i === 0 ? styles.faceImage : styles.overlayItem}
-                        resizeMode="cover"
-                      />
-                    </Pressable>
-                    <Pressable onPress={() => nextItem(i)}>
-                      <Ionicons
-                        name="chevron-forward-circle"
-                        size={40}
-                        color="#1a1a1a"
-                      />
-                    </Pressable>
+          {isCollageMode ? (
+            // COLLAGE MODE
+            <View style={styles.collageWrapper}>
+              <View style={styles.collageCanvas}>
+                {collageItems.map((item) => (
+                  <DraggableItem
+                    key={item.id}
+                    item={item}
+                    onUpdate={updateCollageItem}
+                    onRemove={removeCollageItem}
+                  />
+                ))}
+                {collageItems.length === 0 && (
+                  <View style={styles.collageEmptyState}>
+                    <Ionicons name="images-outline" size={48} color="#ccc" />
+                    <Text style={styles.collageEmptyText}>
+                      Select a category below to add items
+                    </Text>
                   </View>
-                );
-              })}
+                )}
+              </View>
+
+              {/* Category Selector */}
+              <View style={styles.categorySelector}>
+                <ScrollView 
+                  horizontal 
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.categorySelectorContent}
+                >
+                  {["Tops", "Bottoms", "Shoes", "Accessories"].map((cat) => (
+                    <TouchableOpacity
+                      key={cat}
+                      onPress={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
+                      style={[
+                        styles.categoryButton,
+                        selectedCategory === cat && styles.categoryButtonActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.categoryButtonText,
+                          selectedCategory === cat && styles.categoryButtonTextActive,
+                        ]}
+                      >
+                        {cat}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+
+              {/* Items Grid */}
+              {selectedCategory && closet[selectedCategory]?.length > 0 && (
+                <ScrollView 
+                  style={styles.itemsScroll}
+                  contentContainerStyle={styles.itemsGrid}
+                >
+                  {closet[selectedCategory].map((item) => (
+                    <TouchableOpacity
+                      key={item.id}
+                      onPress={() => addCollageItem(item)}
+                      style={styles.gridItem}
+                    >
+                      <Image source={{ uri: item.uri }} style={styles.gridItemImage} />
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
             </View>
-          </ScrollView>
+          ) : (
+            // MODEL MODE
+            <ScrollView 
+              contentContainerStyle={styles.builderContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.modelContainer}>
+                <View style={styles.modelBody} />
+                {slots.map((slot, i) => {
+                  if (!slot.category) {
+                    return (
+                      <Pressable
+                        key={i}
+                        style={[
+                          i === 0 ? styles.facePlusButton : styles.plusButton, 
+                          { top: 140 * i + 40 }
+                        ]}
+                        onPress={() =>
+                          i === 0 ? pickFaceImage() : pickCategory(i)
+                        }
+                      >
+                        <Ionicons name="add" size={i === 0 ? 40 : 32} color="#fff" />
+                      </Pressable>
+                    );
+                  }
+                  const items = closet[slot.category];
+                  if (!items?.length) return null;
+                  const currentItem = items[slot.index];
+                  if (!currentItem) return null;
+                  
+                  return (
+                    <View
+                      key={i}
+                      style={[styles.slotContainer, { top: 140 * i + 40 }]}
+                    >
+                      <Pressable onPress={() => prevItem(i)}>
+                        <Ionicons name="chevron-back-circle" size={40} color="#1a1a1a" />
+                      </Pressable>
+                      <Pressable onLongPress={() => handleSlotLongPress(i)}>
+                        <Image
+                          source={{ uri: currentItem.uri }}
+                          style={i === 0 ? styles.faceImage : styles.overlayItem}
+                          resizeMode="cover"
+                        />
+                      </Pressable>
+                      <Pressable onPress={() => nextItem(i)}>
+                        <Ionicons
+                          name="chevron-forward-circle"
+                          size={40}
+                          color="#1a1a1a"
+                        />
+                      </Pressable>
+                    </View>
+                  );
+                })}
+              </View>
+
+              {/* Clear and Randomize buttons under the builder */}
+              <View style={styles.builderActions}>
+                <Pressable style={styles.randomizeButton} onPress={randomizeOutfit}>
+                  <Ionicons name="shuffle-outline" size={22} color="#fff" />
+                  <Text style={styles.builderActionText}>Randomize</Text>
+                </Pressable>
+                
+                <Pressable style={styles.clearButtonBuilder} onPress={clearOutfit}>
+                  <Ionicons name="refresh-outline" size={22} color="#fff" />
+                  <Text style={styles.builderActionText}>Clear</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          )}
 
           <View style={styles.actionContainer}>
             <Pressable style={styles.saveButton} onPress={saveOutfit}>
               <Ionicons name="save-outline" size={20} color="#fff" />
               <Text style={styles.saveButtonText}>Save Outfit</Text>
             </Pressable>
+
             <Pressable style={styles.viewButton} onPress={() => setShowLibrary(true)}>
               <Ionicons name="albums-outline" size={20} color="#1a1a1a" />
               <Text style={styles.viewButtonText}>My Outfits</Text>
@@ -571,6 +845,129 @@ const styles = StyleSheet.create({
   builderWrapper: {
     flex: 1,
   },
+  simpleHeader: {
+    padding: 16,
+    backgroundColor: "#fafafa",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  simpleHeaderTitle: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#1a1a1a",
+  },
+  toggleButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+  },
+  toggleText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1a1a1a",
+  },
+  // Collage Mode Styles
+  collageWrapper: {
+    flex: 1,
+  },
+  collageCanvas: {
+    height: 400,
+    backgroundColor: "#fff",
+    margin: 16,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: "#e0e0e0",
+    borderStyle: "dashed",
+    position: "relative",
+    overflow: "hidden",
+  },
+  collageEmptyState: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  collageEmptyText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: "#999",
+    fontWeight: "500",
+  },
+  draggableItem: {
+    position: "absolute",
+    width: 120,
+    height: 120,
+  },
+  draggableImageContainer: {
+    width: "100%",
+    height: "100%",
+  },
+  draggableImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+  },
+  categorySelector: {
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  categorySelectorContent: {
+    gap: 8,
+  },
+  categoryButton: {
+    backgroundColor: "#f0f0f0",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  categoryButtonActive: {
+    backgroundColor: "#0066ff",
+    borderColor: "#0066ff",
+  },
+  categoryButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#666",
+  },
+  categoryButtonTextActive: {
+    color: "#fff",
+  },
+  itemsScroll: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  itemsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingBottom: 150,
+  },
+  gridItem: {
+    width: (SCREEN_WIDTH - 48) / 3,
+    height: (SCREEN_WIDTH - 48) / 3,
+    borderRadius: 8,
+    overflow: "hidden",
+    backgroundColor: "#f0f0f0",
+  },
+  gridItemImage: {
+    width: "100%",
+    height: "100%",
+  },
+  // Model Mode Styles
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -580,16 +977,31 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderColor: "#eee",
   },
-  headerTitle: { fontSize: 22, fontWeight: "700" },
+  headerTitle: { 
+    fontSize: 22, 
+    fontWeight: "700" 
+  },
   emptyState: { 
     flex: 1, 
     justifyContent: "center", 
     alignItems: "center", 
     padding: 32 
   },
-  emptyText: { fontSize: 18, fontWeight: "600", color: "#666", marginTop: 8 },
-  emptySubtext: { fontSize: 14, color: "#999", marginTop: 4 },
-  listContent: { padding: 16, paddingBottom: 32 },
+  emptyText: { 
+    fontSize: 18, 
+    fontWeight: "600", 
+    color: "#666", 
+    marginTop: 8 
+  },
+  emptySubtext: { 
+    fontSize: 14, 
+    color: "#999", 
+    marginTop: 4 
+  },
+  listContent: { 
+    padding: 16, 
+    paddingBottom: 150 
+  },
   categoryContainer: {
     backgroundColor: "#fff",
     borderRadius: 12,
@@ -604,28 +1016,26 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderColor: "#f0f0f0",
   },
-  categoryTitle: { fontSize: 18, fontWeight: "700", color: "#1a1a1a" },
-  categoryCount: { fontSize: 13, color: "#999", marginTop: 2 },
+  categoryTitle: { 
+    fontSize: 18, 
+    fontWeight: "700", 
+    color: "#1a1a1a" 
+  },
+  categoryCount: { 
+    fontSize: 13, 
+    color: "#999", 
+    marginTop: 2 
+  },
   outfitGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     padding: 8,
   },
-  builderHeader: {
-    padding: 16,
-    backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderColor: "#eee",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  builderTitle: { fontSize: 24, fontWeight: "700" },
-  clearText: { fontSize: 16, color: "#ff4757", fontWeight: "600" },
   builderContent: { 
     flexGrow: 1, 
     alignItems: "center", 
     paddingVertical: 20,
+    paddingBottom: 150,
     minHeight: 750,
   },
   modelContainer: {
@@ -640,6 +1050,49 @@ const styles = StyleSheet.create({
     backgroundColor: "#e8e8e8",
     borderRadius: 90,
     marginTop: 120,
+  },
+  builderActions: {
+    flexDirection: "row",
+    gap: 18,
+    marginTop: 0,
+    paddingHorizontal: 20,
+  },
+  randomizeButton: {
+    backgroundColor: "#5f27cd",
+    borderRadius: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3.84,
+    elevation: 4,
+  },
+  clearButtonBuilder: {
+    backgroundColor: "#ff4757",
+    borderRadius: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3.84,
+    elevation: 4,
+  },
+  builderActionText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
   },
   slotContainer: {
     position: "absolute",
@@ -682,12 +1135,17 @@ const styles = StyleSheet.create({
     borderColor: "#fff",
   },
   actionContainer: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
     flexDirection: "row",
     justifyContent: "space-around",
     padding: 16,
-    backgroundColor: "#fff",
-    borderTopWidth: 1,
-    borderColor: "#eee",
+    paddingBottom: 85,
+    backgroundColor: "transparent",
+    borderTopWidth: 0,
+    borderColor: "transparent",
     gap: 12,
   },
   saveButton: {
@@ -701,7 +1159,11 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
   },
-  saveButtonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  saveButtonText: { 
+    color: "#fff", 
+    fontWeight: "700", 
+    fontSize: 16 
+  },
   viewButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -713,7 +1175,11 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
   },
-  viewButtonText: { fontWeight: "700", color: "#1a1a1a", fontSize: 16 },
+  viewButtonText: { 
+    fontWeight: "700", 
+    color: "#1a1a1a", 
+    fontSize: 16 
+  },
   outfitCard: {
     width: "48%",
     margin: "1%",
@@ -730,7 +1196,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 4,
   },
-  thumbnail: { width: 60, height: 60, borderRadius: 6 },
+  thumbnail: { 
+    width: 60, 
+    height: 60, 
+    borderRadius: 6 
+  },
   cardLabel: {
     fontSize: 12,
     color: "#777",
@@ -751,8 +1221,17 @@ const styles = StyleSheet.create({
     width: "85%",
     maxHeight: "80%",
   },
-  modalTitle: { fontSize: 20, fontWeight: "800", marginBottom: 12 },
-  modalSubtext: { fontSize: 14, color: "#666", marginBottom: 12, fontWeight: "600" },
+  modalTitle: { 
+    fontSize: 20, 
+    fontWeight: "800", 
+    marginBottom: 12 
+  },
+  modalSubtext: { 
+    fontSize: 14, 
+    color: "#666", 
+    marginBottom: 12, 
+    fontWeight: "600" 
+  },
   categoryList: {
     maxHeight: 200,
     marginBottom: 12,
@@ -818,6 +1297,14 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
   },
-  modalBtnText: { color: "#666", fontWeight: "600", fontSize: 16 },
-  modalBtnTextPrimary: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  modalBtnText: { 
+    color: "#666", 
+    fontWeight: "600", 
+    fontSize: 16 
+  },
+  modalBtnTextPrimary: { 
+    color: "#fff", 
+    fontWeight: "700", 
+    fontSize: 16 
+  },
 });
