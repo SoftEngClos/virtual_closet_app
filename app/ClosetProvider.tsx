@@ -15,6 +15,9 @@ import {
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { onAuthStateChanged, User } from "firebase/auth";
 
+import * as ImageManipulator from "expo-image-manipulator";
+
+
 type ClosetItem = {
   id: string;
   uri: string;
@@ -180,58 +183,76 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const uploadImageToStorage = async (
-    uri: string,
-    category: string
-  ): Promise<string> => {
-    if (!user) throw new Error("User not authenticated");
+     uri: string,
+  category: string
+): Promise<string> => {
+  if (!user) throw new Error("User not authenticated");
 
-    try {
-      console.log("Starting upload for URI:", uri);
+  const lower = uri.toLowerCase();
+  // default to png for our cropped output; switch to jpg if the URI clearly says so
+  let intendedExt: "png" | "jpg" =
+    lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? "jpg" : "png";
 
-      const response = await fetch(uri);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
-      }
+  // 1) Read the URI into a Blob
+  let res = await fetch(uri);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch image: ${res.status} ${res.statusText}`);
+  }
+  let blob = await res.blob();
+  if (!blob || blob.size === 0) throw new Error("Invalid image blob - size is 0");
 
-      const blob = await response.blob();
-      console.log("Blob created:", {
-        type: blob.type,
-        size: blob.size,
-      });
+  // 2) If blob.type is missing or not image/*, re-encode to PNG
+  let typeOk = !!blob.type && blob.type.startsWith("image/");
+  if (!typeOk) {
+    const encoded = await ImageManipulator.manipulateAsync(
+      uri,
+      [], // no ops, just re-encode
+      { compress: 1, format: ImageManipulator.SaveFormat.PNG }
+    );
+    res = await fetch(encoded.uri);
+    blob = await res.blob();
+    intendedExt = "png";
+  }
 
-      if (!blob || blob.size === 0) {
-        throw new Error("Invalid image blob - size is 0");
-      }
+  // 3) Handle HEIC (convert to JPEG)
+  let contentType =
+    blob.type && blob.type.startsWith("image/") ? blob.type : undefined;
 
-      const timestamp = Date.now();
-      const extension = blob.type ? blob.type.split('/')[1] : 'jpg';
-      const filename = `${timestamp}_${category}.${extension}`;
-      const storagePath = `users/${user.uid}/closet/${category}/${filename}`;
-      const storageRef = ref(storage, storagePath);
+  if (contentType?.includes("heic")) {
+    const jpeg = await ImageManipulator.manipulateAsync(
+      uri,
+      [],
+      { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
+    );
+    res = await fetch(jpeg.uri);
+    blob = await res.blob();
+    contentType = "image/jpeg";
+    intendedExt = "jpg";
+  }
 
-      console.log("Uploading to:", storagePath);
+  // 4) Finalize contentType if still unknown
+  if (!contentType) {
+    contentType = intendedExt === "png" ? "image/png" : "image/jpeg";
+  }
 
-      const metadata = {
-        contentType: blob.type || 'image/jpeg',
-        customMetadata: {
-          uploadedAt: new Date().toISOString(),
-          category: category,
-        }
-      };
+  // 5) Build a filename that matches the real bytes
+  const filename = `${Date.now()}_${category}.${intendedExt}`;
+  const storagePath = `users/${user.uid}/closet/${category}/${filename}`;
+  const sref = ref(storage, storagePath);
 
-      const snapshot = await uploadBytes(storageRef, blob, metadata);
-      console.log("Upload successful!");
+  // 6) Upload with correct metadata
+  await uploadBytes(sref, blob, {
+    contentType,
+    customMetadata: {
+      uploadedAt: new Date().toISOString(),
+      category,
+    },
+  });
 
-      const downloadURL = await getDownloadURL(snapshot.ref);
-      console.log("Download URL obtained:", downloadURL);
-
-      return downloadURL;
-    } catch (error: any) {
-      console.error("Error uploading image:", error);
-      throw error;
-    }
-  };
+  // 7) Public URL to render in <Image>
+  const downloadURL = await getDownloadURL(sref);
+  return downloadURL;
+};
 
   const addItem = async (item: Omit<ClosetItem, "id">) => {
     if (!user) {

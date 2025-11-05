@@ -3,7 +3,7 @@ import {
   View,
   Text,
   TouchableOpacity,
-  Image,
+  
   FlatList,
   StyleSheet,
   Alert,
@@ -16,6 +16,8 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useCloset } from "../ClosetProvider";
+
+import { Image } from "expo-image";
 
 const CATEGORIES = ["Tops", "Bottoms", "Shoes", "Accessories"];
 
@@ -414,6 +416,10 @@ const ClosetScreen = () => {
                       <Image 
                         source={{ uri: item.uri }} 
                         style={styles.image}
+                        contentFit = "contain"
+                        cachePolicy = "disk"
+                        onLoad={() => console.log("Expo image loaded", item.uri)}
+                        onError={(e) => console.log("expo-image error", item.uri, e)}
                       />
                       {(item.brand || item.price) && (
                         <View style={styles.itemBadge}>
@@ -503,7 +509,11 @@ const ClosetScreen = () => {
 
                     return (
                       <View key={index} style={styles.storedItemCard}>
-                        <Image source={{ uri: item.uri }} style={styles.storedImage} />
+                        <Image source={{ uri: item.uri }} 
+                        style={styles.storedImage}
+                        contentFit="cover"
+                        cachePolicy="disk"
+                         />
                         <View style={styles.storedItemInfo}>
                           <Text style={styles.storedItemCategory}>
                             {storedItem.category}
