@@ -1,436 +1,1310 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
   Pressable,
   Image,
   StyleSheet,
-  FlatList, // Changed from SectionList back to FlatList for the accordion
   Alert,
   TouchableOpacity,
+  Modal,
+  TextInput,
+  ScrollView,
+  Animated,
+  PanResponder,
+  Dimensions,
 } from "react-native";
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCloset } from "../ClosetProvider";
+import * as ImagePicker from "expo-image-picker";
+import { auth, db } from "../../firebaseConfig";
+import {
+  collection,
+  addDoc,
+  getDocs,
+  query,
+  where,
+  deleteDoc,
+  doc,
+} from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
 
-// Types remain the same
-type OutfitItem = { category: string; uri: string };
-type SavedOutfit = { id: string; outfit: OutfitItem[] };
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+type OutfitItem = { category: string; uri: string; slotIndex: number };
+type SavedOutfit = { id: string; outfit: OutfitItem[]; category: string };
 type OutfitCategories = Record<string, SavedOutfit[]>;
 type Slot = { category: string | null; index: number };
 
-const DEFAULT_CATEGORY = "Uncategorized"; // NEW: Default category constant
+type CollageItem = {
+  id: string;
+  uri: string;
+  category: string;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+};
+
+// Draggable Item Component
+const DraggableItem = ({ item, onUpdate, onRemove }: any) => {
+  const position = useRef(new Animated.ValueXY({ x: item.x, y: item.y })).current;
+  const [isDragging, setIsDragging] = useState(false);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        setIsDragging(true);
+        position.setOffset({
+          x: position.x._value,
+          y: position.y._value,
+        });
+        position.setValue({ x: 0, y: 0 });
+      },
+      onPanResponderMove: Animated.event(
+        [null, { dx: position.x, dy: position.y }],
+        { useNativeDriver: false }
+      ),
+      onPanResponderRelease: () => {
+        setIsDragging(false);
+        position.flattenOffset();
+        onUpdate(item.id, {
+          x: position.x._value,
+          y: position.y._value,
+        });
+      },
+    })
+  ).current;
+
+  return (
+    <Animated.View
+      style={[
+        styles.draggableItem,
+        {
+          transform: [
+            ...position.getTranslateTransform(),
+            { scale: item.scale },
+            { rotate: `${item.rotation}deg` },
+          ],
+          opacity: isDragging ? 0.8 : 1,
+          zIndex: isDragging ? 1000 : 1,
+        },
+      ]}
+      {...panResponder.panHandlers}
+    >
+      <TouchableOpacity
+        onLongPress={() => onRemove(item.id)}
+        style={styles.draggableImageContainer}
+      >
+        <Image source={{ uri: item.uri }} style={styles.draggableImage} />
+      </TouchableOpacity>
+    </Animated.View>
+  );
+};
 
 export default function OutfitsScreen() {
   const { closet } = useCloset();
-  const allClosetCategories = Object.keys(closet);
+  const allClosetCategories = Object.keys(closet).filter(
+    (cat) => closet[cat]?.length > 0
+  );
 
+  const [user, setUser] = useState<any>(null);
   const [slots, setSlots] = useState<Slot[]>(
-    Array(4).fill({ category: null, index: 0 })
+    Array(5).fill(null).map(() => ({ category: null, index: 0 }))
   );
   const [savedOutfits, setSavedOutfits] = useState<OutfitCategories>({});
   const [showLibrary, setShowLibrary] = useState(false);
-  // NEW: State to track which category is expanded
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [customCategoryName, setCustomCategoryName] = useState("");
+  const [selectedExistingCategory, setSelectedExistingCategory] = useState<string | null>(null);
+
+  // Collage mode states
+  const [isCollageMode, setIsCollageMode] = useState(false);
+  const [collageItems, setCollageItems] = useState<CollageItem[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   useEffect(() => {
-    loadOutfits();
+    const unsub = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser) {
+        setUser(firebaseUser);
+        loadOutfits(firebaseUser.uid);
+      } else {
+        setUser(null);
+        setSavedOutfits({});
+      }
+    });
+    return () => unsub();
   }, []);
 
-  // This function remains the same
-  const persistOutfits = async (newOutfits: OutfitCategories) => {
+  const loadOutfits = async (uid: string) => {
     try {
-      await AsyncStorage.setItem("savedOutfits", JSON.stringify(newOutfits));
-      setSavedOutfits(newOutfits);
+      const q = query(collection(db, "outfits"), where("uid", "==", uid));
+      const snapshot = await getDocs(q);
+      const outfits: OutfitCategories = {};
+
+      snapshot.docs.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        const { category, outfit } = data;
+        if (!outfits[category]) outfits[category] = [];
+        outfits[category].push({ id: docSnap.id, category, outfit });
+      });
+
+      setSavedOutfits(outfits);
     } catch (err) {
-      console.error("Failed to save outfits", err);
+      console.error("Error loading outfits:", err);
     }
-  };
-  
-  // This function remains the same
-  const addOutfitToCategory = (outfit: SavedOutfit, category: string) => {
-    const newOutfits = { ...savedOutfits };
-    if (!newOutfits[category]) {
-        newOutfits[category] = [];
-    }
-    newOutfits[category].push(outfit);
-    persistOutfits(newOutfits);
-    Alert.alert("Success", `Outfit saved to "${category}"!`);
   };
 
-  // MODIFIED: saveOutfit is now much simpler
-  const saveOutfit = async () => {
-    const currentOutfitItems = slots
-      .filter((s) => s.category && closet[s.category]?.length)
-      .map((slot) => {
-        const item = closet[slot.category!][slot.index];
-        return { category: slot.category!, uri: item.uri };
+  const addOutfitToCategory = async (outfit: OutfitItem[], category: string) => {
+    if (!user) {
+      Alert.alert("Error", "Please sign in to save outfits.");
+      return;
+    }
+    
+    try {
+      console.log("Saving outfit with slot positions:", outfit);
+      
+      await addDoc(collection(db, "outfits"), {
+        uid: user.uid,
+        category,
+        outfit,
+        createdAt: new Date().toISOString(),
       });
+      
+      await loadOutfits(user.uid);
+      Alert.alert("Success", `Outfit saved to "${category}"!`);
+    } catch (err: any) {
+      console.error("Error saving outfit:", err);
+      Alert.alert("Error", "Failed to save outfit. Please try again.");
+    }
+  };
+
+  const deleteOutfit = async (outfitId: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, "outfits", outfitId));
+      await loadOutfits(user.uid);
+      Alert.alert("Success", "Outfit deleted!");
+    } catch (err) {
+      console.error("Error deleting outfit:", err);
+      Alert.alert("Error", "Failed to delete outfit.");
+    }
+  };
+
+  const handleOutfitLongPress = (outfit: SavedOutfit) => {
+    Alert.alert("Outfit Options", "What would you like to do?", [
+      {
+        text: "Load Outfit",
+        onPress: () => loadOutfitToModel(outfit),
+      },
+      {
+        text: "Delete Outfit",
+        style: "destructive",
+        onPress: () => {
+          Alert.alert(
+            "Confirm Delete",
+            "Are you sure you want to delete this outfit?",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Delete",
+                style: "destructive",
+                onPress: () => deleteOutfit(outfit.id),
+              },
+            ]
+          );
+        },
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
+
+  const saveOutfit = () => {
+    let currentOutfitItems: OutfitItem[] = [];
+    
+    if (isCollageMode) {
+      // Save collage items
+      currentOutfitItems = collageItems.map((item, index) => ({
+        category: item.category,
+        uri: item.uri,
+        slotIndex: index,
+      }));
+    } else {
+      // Save model items
+      slots.forEach((slot, slotIndex) => {
+        if (slot.category && closet[slot.category]?.length) {
+          currentOutfitItems.push({
+            category: slot.category,
+            uri: closet[slot.category][slot.index].uri,
+            slotIndex: slotIndex,
+          });
+        }
+      });
+    }
 
     if (currentOutfitItems.length === 0) {
       return Alert.alert("Empty Outfit", "Please add items to save an outfit.");
     }
-    
-    const newSavedOutfit: SavedOutfit = {
-        id: Date.now().toString(),
-        outfit: currentOutfitItems
-    };
-    
-    // Automatically add to the default category without asking the user
-    addOutfitToCategory(newSavedOutfit, DEFAULT_CATEGORY);
+
+    console.log("Current outfit items with slots:", currentOutfitItems);
+
+    setSelectedExistingCategory(null);
+    setCustomCategoryName("");
+    setSaveModalOpen(true);
   };
-  
-  // All other helper functions (pickCategory, nextItem, prevItem, loadOutfits,
-  // loadOutfitToModel, handleOutfitLongPress, etc.) remain the same as before.
-  // ... (keeping them hidden here for brevity, but they are in the full code below)
-    const pickCategory = (slotIndex: number) => {
-        Alert.alert(
-        "Choose Category",
-        null,
-        allClosetCategories.map((cat) => ({
-            text: cat,
-            onPress: () => {
+
+  const confirmSaveOutfit = async () => {
+    const category = selectedExistingCategory || customCategoryName.trim() || "Saved Outfits";
+    
+    if (!category) {
+      Alert.alert("Error", "Please select or enter a category name.");
+      return;
+    }
+
+    let outfitItems: OutfitItem[] = [];
+    
+    if (isCollageMode) {
+      outfitItems = collageItems.map((item, index) => ({
+        category: item.category,
+        uri: item.uri,
+        slotIndex: index,
+      }));
+    } else {
+      slots.forEach((slot, slotIndex) => {
+        if (slot.category && closet[slot.category]?.length) {
+          outfitItems.push({
+            category: slot.category,
+            uri: closet[slot.category][slot.index].uri,
+            slotIndex: slotIndex,
+          });
+        }
+      });
+    }
+
+    await addOutfitToCategory(outfitItems, category);
+    setSaveModalOpen(false);
+    setCustomCategoryName("");
+    setSelectedExistingCategory(null);
+  };
+
+  const pickCategory = (slotIndex: number) => {
+    const categoryOrder = ["Tops", "Bottoms", "Shoes", "Accessories"];
+    const availableCategories = categoryOrder.filter((cat) =>
+      allClosetCategories.includes(cat)
+    );
+
+    if (availableCategories.length === 0) {
+      Alert.alert("No Items", "Add items to your closet first!");
+      return;
+    }
+
+    Alert.alert(
+      "Choose Category",
+      "",
+      [
+        ...availableCategories.map((cat) => ({
+          text: cat,
+          onPress: () => {
             const newSlots = [...slots];
             newSlots[slotIndex] = { category: cat, index: 0 };
             setSlots(newSlots);
-            },
-        }))
-        );
-    };
+          },
+        })),
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
+  };
 
-    const nextItem = (slotIndex: number) => {
-        const slot = slots[slotIndex];
-        if (!slot.category) return;
-        const items = closet[slot.category];
-        if (!items || !items.length) return;
-        const newIndex = (slot.index + 1) % items.length;
-        const newSlots = [...slots];
-        newSlots[slotIndex].index = newIndex;
-        setSlots(newSlots);
-    };
+  const pickFaceImage = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: "images",
+      allowsEditing: true,
+      quality: 1,
+      aspect: [1, 1],
+    });
 
-    const prevItem = (slotIndex: number) => {
-        const slot = slots[slotIndex];
-        if (!slot.category) return;
-        const items = closet[slot.category];
-        if (!items || !items.length) return;
-        const newIndex = (slot.index - 1 + items.length) % items.length;
-        const newSlots = [...slots];
-        newSlots[slotIndex].index = newIndex;
-        setSlots(newSlots);
-    };
+    if (!result.canceled && result.assets.length > 0) {
+      const newSlots = [...slots];
+      newSlots[0] = { category: "Face", index: 0 };
+      setSlots(newSlots);
+
+      if (!closet["Face"]) closet["Face"] = [];
+      closet["Face"][0] = {
+        id: "face-item",
+        uri: result.assets[0].uri,
+        category: "Face",
+        tags: [],
+      };
+    }
+  };
+
+  const nextItem = (i: number) => {
+    const slot = slots[i];
+    if (!slot.category) return;
+    const items = closet[slot.category];
+    if (!items?.length) return;
+    const newSlots = [...slots];
+    newSlots[i].index = (slot.index + 1) % items.length;
+    setSlots(newSlots);
+  };
+
+  const prevItem = (i: number) => {
+    const slot = slots[i];
+    if (!slot.category) return;
+    const items = closet[slot.category];
+    if (!items?.length) return;
+    const newSlots = [...slots];
+    newSlots[i].index = (slot.index - 1 + items.length) % items.length;
+    setSlots(newSlots);
+  };
+
+  const removeSlotCategory = (i: number) => {
+    const newSlots = [...slots];
+    newSlots[i] = { category: null, index: 0 };
+    setSlots(newSlots);
+  };
+
+  const handleSlotLongPress = (i: number) => {
+    if (slots[i].category) {
+      Alert.alert("Remove", "Remove this item from the outfit?", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Remove", style: "destructive", onPress: () => removeSlotCategory(i) },
+      ]);
+    }
+  };
+
+  const loadOutfitToModel = (outfit: SavedOutfit) => {
+    console.log("Loading outfit:", outfit.outfit);
     
-    const createNewCategoryAndAdd = (outfit: SavedOutfit) => {
-        Alert.prompt("New Category", "Enter a name for your new category:", (newCategoryName) => {
-            if (newCategoryName) {
-                addOutfitToCategory(outfit, newCategoryName);
-            }
-        });
-    };
-
-    const loadOutfits = async () => {
-        try {
-        const existing = await AsyncStorage.getItem("savedOutfits");
-        if (existing) setSavedOutfits(JSON.parse(existing));
-        } catch (err) {
-        console.error(err);
-        }
-    };
-
-    const loadOutfitToModel = (outfit: SavedOutfit) => {
-        const newSlots: Slot[] = Array(4).fill({ category: null, index: 0 });
-        outfit.outfit.forEach((piece, i) => {
+    // Initialize all slots as empty
+    const newSlots: Slot[] = Array(5)
+      .fill(null)
+      .map(() => ({ category: null, index: 0 }));
+    
+    outfit.outfit.forEach((piece, pieceIndex) => {
+      const targetSlot = piece.slotIndex !== undefined ? piece.slotIndex : pieceIndex;
+      
+      if (targetSlot >= 0 && targetSlot < 5) {
         const items = closet[piece.category];
-        const index = items.findIndex((it) => it.uri === piece.uri);
-        if (i < newSlots.length) {
-            newSlots[i] = {
-            category: piece.category,
-            index: index >= 0 ? index : 0,
-            };
+        if (items && items.length > 0) {
+          const itemIndex = items.findIndex((it) => it.uri === piece.uri);
+          newSlots[targetSlot] = { 
+            category: piece.category, 
+            index: itemIndex >= 0 ? itemIndex : 0 
+          };
+          console.log(`Successfully placed ${piece.category} at slot ${targetSlot}`);
+        } else {
+          console.log(`No items found for category ${piece.category}`);
         }
-        });
-        setSlots(newSlots);
-        setShowLibrary(false);
-    };
+      }
+    });
     
-    const handleOutfitLongPress = (outfit: SavedOutfit, category: string) => {
-        Alert.alert(
-            "Outfit Options",
-            "How would you like to organize this outfit?",
-            [
-                { text: "Favorite (Move to Top)", onPress: () => favoriteOutfit(outfit, category) },
-                { text: "Move to Category", onPress: () => moveOutfit(outfit, category) },
-                { text: "Create New Category...", onPress: () => createNewCategoryAndMove(outfit, category) },
-                { text: "Remove Outfit", style: "destructive", onPress: () => removeOutfit(outfit, category) },
-                { text: "Cancel", style: "cancel" },
-            ]
-        )
-    };
+    console.log("Final slots:", newSlots);
+    setSlots(newSlots);
+    setShowLibrary(false);
+    setIsCollageMode(false);
+    Alert.alert("Outfit Loaded", "Your outfit has been loaded to the builder!");
+  };
 
-    const favoriteOutfit = (outfit: SavedOutfit, category: string) => {
-        const newOutfits = { ...savedOutfits };
-        const categoryOutfits = newOutfits[category].filter(o => o.id !== outfit.id);
-        categoryOutfits.unshift(outfit);
-        newOutfits[category] = categoryOutfits;
-        persistOutfits(newOutfits);
-    };
-    
-    const removeOutfit = (outfit: SavedOutfit, category: string) => {
-        const newOutfits = { ...savedOutfits };
-        newOutfits[category] = newOutfits[category].filter(o => o.id !== outfit.id);
-        if (newOutfits[category].length === 0) {
-            delete newOutfits[category];
+  const clearOutfit = () => {
+    Alert.alert("Clear Outfit", "Remove all items from the outfit?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Clear",
+        style: "destructive",
+        onPress: () => {
+          if (isCollageMode) {
+            setCollageItems([]);
+          } else {
+            setSlots(Array(5).fill(null).map(() => ({ category: null, index: 0 })));
+          }
+        },
+      },
+    ]);
+  };
+
+  const randomizeOutfit = () => {
+    if (allClosetCategories.length === 0) {
+      Alert.alert("No Items", "Add items to your closet first!");
+      return;
+    }
+
+    if (isCollageMode) {
+      // Randomize collage items
+      const newItems = collageItems.map(item => {
+        const items = closet[item.category];
+        if (items && items.length > 0) {
+          const randomItem = items[Math.floor(Math.random() * items.length)];
+          return {
+            ...item,
+            uri: randomItem.uri,
+          };
         }
-        persistOutfits(newOutfits);
-    };
+        return item;
+      });
+      setCollageItems(newItems);
+    } else {
+      // Randomize model slots
+      const newSlots: Slot[] = Array(5).fill(null).map(() => ({ category: null, index: 0 }));
 
-    const moveOutfit = (outfit: SavedOutfit, oldCategory: string) => {
-        const otherCategories = Object.keys(savedOutfits).filter(c => c !== oldCategory);
-        if(otherCategories.length === 0) {
-            return Alert.alert("No other categories", "Create a new category to move this outfit.");
+      slots.forEach((slot, i) => {
+        if (slot.category && closet[slot.category]?.length > 0) {
+          const items = closet[slot.category];
+          const randomIndex = Math.floor(Math.random() * items.length);
+          newSlots[i] = { category: slot.category, index: randomIndex };
         }
-        const buttons = otherCategories.map(cat => ({
-            text: cat,
-            onPress: () => {
-                const newOutfits = { ...savedOutfits };
-                newOutfits[oldCategory] = newOutfits[oldCategory].filter(o => o.id !== outfit.id);
-                if (newOutfits[oldCategory].length === 0) delete newOutfits[oldCategory];
-                if (!newOutfits[cat]) newOutfits[cat] = [];
-                newOutfits[cat].push(outfit);
-                persistOutfits(newOutfits);
-            }
-        }));
-        buttons.push({text: "Cancel", style: "cancel"});
-        Alert.alert("Move to...", "Select a new category for this outfit.", buttons);
-    };
+      });
 
-    const createNewCategoryAndMove = (outfit: SavedOutfit, oldCategory: string) => {
-        Alert.prompt("New Category", "Enter a name for the new category:", (newCategoryName) => {
-            if (newCategoryName) {
-                const newOutfits = { ...savedOutfits };
-                newOutfits[oldCategory] = newOutfits[oldCategory].filter(o => o.id !== outfit.id);
-                if (newOutfits[oldCategory].length === 0) delete newOutfits[oldCategory];
+      const hasCategories = newSlots.some(slot => slot.category !== null);
+      
+      if (!hasCategories) {
+        Alert.alert("No Categories", "Please add categories to slots first, then randomize!");
+        return;
+      }
 
-                if (!newOutfits[newCategoryName]) newOutfits[newCategoryName] = [];
-                newOutfits[newCategoryName].push(outfit);
-                persistOutfits(newOutfits);
-            }
-        });
+      setSlots(newSlots);
+    }
+  };
+
+  const toggleMode = () => {
+    setIsCollageMode(!isCollageMode);
+    setSelectedCategory(null);
+  };
+
+  // Collage mode functions
+  const addCollageItem = (item: any) => {
+    const newItem: CollageItem = {
+      id: `${Date.now()}_${Math.random()}`,
+      uri: item.uri,
+      category: selectedCategory || "Unknown",
+      x: Math.random() * (SCREEN_WIDTH - 200) + 50,
+      y: Math.random() * 400 + 100,
+      scale: 1,
+      rotation: 0,
     };
-  // END of hidden functions
+    setCollageItems([...collageItems, newItem]);
+  };
+
+  const updateCollageItem = (id: string, updates: any) => {
+    setCollageItems(items =>
+      items.map(item => (item.id === id ? { ...item, ...updates } : item))
+    );
+  };
+
+  const removeCollageItem = (id: string) => {
+    Alert.alert("Remove Item", "Remove this item from the collage?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: () => {
+          setCollageItems(items => items.filter(item => item.id !== id));
+        },
+      },
+    ]);
+  };
+
+  const existingCategories = Object.keys(savedOutfits);
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       {showLibrary ? (
         <>
           <View style={styles.headerRow}>
             <Pressable onPress={() => setShowLibrary(false)}>
-              <Ionicons name="arrow-back" size={28} color="#111" />
+              <Ionicons name="chevron-back" size={28} color="#1a1a1a" />
             </Pressable>
-            <Text style={styles.title}>My Saved Outfits</Text>
+            <Text style={styles.headerTitle}>Saved Outfits</Text>
+            <View style={{ width: 28 }} />
           </View>
 
           {Object.keys(savedOutfits).length === 0 ? (
-            <Text style={{ marginTop: 20 }}>No saved outfits yet.</Text>
+            <View style={styles.emptyState}>
+              <Ionicons name="shirt-outline" size={64} color="#ccc" />
+              <Text style={styles.emptyText}>No saved outfits yet</Text>
+              <Text style={styles.emptySubtext}>Create and save your first outfit</Text>
+            </View>
           ) : (
-            // MODIFIED: Replaced SectionList with a FlatList to create the accordion
-            <FlatList
-              data={Object.keys(savedOutfits)}
-              keyExtractor={(category) => category}
-              renderItem={({ item: category }) => (
-                <View style={styles.categoryContainer}>
+            <ScrollView contentContainerStyle={styles.listContent}>
+              {Object.keys(savedOutfits).map((category) => (
+                <View key={category} style={styles.categoryContainer}>
                   <TouchableOpacity
                     style={styles.categoryHeader}
-                    onPress={() => {
-                      // Toggle the expanded category
-                      setExpandedCategory(expandedCategory === category ? null : category);
-                    }}
+                    onPress={() =>
+                      setExpandedCategory(
+                        expandedCategory === category ? null : category
+                      )
+                    }
                   >
-                    <Text style={styles.categoryTitle}>{category}</Text>
+                    <View>
+                      <Text style={styles.categoryTitle}>{category}</Text>
+                      <Text style={styles.categoryCount}>
+                        {savedOutfits[category].length} outfits
+                      </Text>
+                    </View>
                     <Ionicons
-                      name={expandedCategory === category ? "chevron-down" : "chevron-forward"}
-                      size={22}
-                      color="#333"
+                      name={
+                        expandedCategory === category
+                          ? "chevron-down"
+                          : "chevron-forward"
+                      }
+                      size={20}
+                      color="#999"
                     />
                   </TouchableOpacity>
 
-                  {/* Conditionally render the outfits if the category is expanded */}
                   {expandedCategory === category && (
-                    <FlatList
-                      data={savedOutfits[category]}
-                      keyExtractor={(outfit) => outfit.id}
-                      numColumns={2}
-                      renderItem={({ item: outfit }) => (
-                         <TouchableOpacity
-                            style={styles.outfitCard}
-                            onPress={() => loadOutfitToModel(outfit)}
-                            onLongPress={() => handleOutfitLongPress(outfit, category)}
-                          >
-                          {Array.isArray(outfit.outfit) && outfit.outfit.map((piece, idx) =>
-                              piece.uri && (
+                    <View style={styles.outfitGrid}>
+                      {savedOutfits[category].map((item) => (
+                        <TouchableOpacity
+                          key={item.id}
+                          style={styles.outfitCard}
+                          onPress={() => loadOutfitToModel(item)}
+                          onLongPress={() => handleOutfitLongPress(item)}
+                        >
+                          <View style={styles.outfitContent}>
+                            {item.outfit.slice(0, 4).map((p, idx) => (
                               <Image
-                                  key={`${outfit.id}-${idx}`}
-                                  source={{ uri: piece.uri }}
-                                  style={styles.thumbnail}
-                                  resizeMode="contain"
+                                key={`${item.id}-${idx}`}
+                                source={{ uri: p.uri }}
+                                style={styles.thumbnail}
                               />
-                              )
-                          )}
-                          </TouchableOpacity>
-                      )}
-                    />
+                            ))}
+                          </View>
+                          <Text style={styles.cardLabel}>
+                            {item.outfit.length} items
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
                   )}
                 </View>
-              )}
-            />
+              ))}
+            </ScrollView>
           )}
         </>
       ) : (
-        // The Outfit Builder part of the screen remains exactly the same
-        <>
-          <Text style={styles.title}>Outfit Builder</Text>
-           <View style={styles.modelContainer}>
-            <View style={styles.modelBody} />
-            {slots.map((slot, i) => {
-              if (!slot.category) {
-                return (
-                  <Pressable
-                    key={i}
-                    style={[styles.plusButton, { top: i * 110 + 40 }]}
-                    onPress={() => pickCategory(i)}
-                  >
-                    <Ionicons name="add" size={28} color="#fff" />
-                  </Pressable>
-                );
-              }
-              const items = closet[slot.category];
-              if (!items || !items.length) return null;
-              const currentItem = items[slot.index];
-              return (
-                <View key={i} style={[styles.slotContainer, { top: i * 110 + 40 }]}>
-                    <Pressable onPress={() => prevItem(i)} style={[styles.arrowButton, styles.leftArrow]}>
-                        <Ionicons name="arrow-back-circle" size={32} color="#111" />
-                    </Pressable>
-                    <Image
-                        source={{ uri: currentItem.uri }}
-                        style={styles.overlayItem}
-                        resizeMode="contain"
-                    />
-                    <Pressable onPress={() => nextItem(i)} style={[styles.arrowButton, styles.rightArrow]}>
-                        <Ionicons name="arrow-forward-circle" size={32} color="#111" />
-                    </Pressable>
-                </View>
-              );
-            })}
+        <View style={styles.builderWrapper}>
+          {/* Header with toggle */}
+          <View style={styles.simpleHeader}>
+            <Text style={styles.simpleHeaderTitle}>Outfit Builder</Text>
+            <TouchableOpacity onPress={toggleMode} style={styles.toggleButton}>
+              <Ionicons 
+                name={isCollageMode ? "grid-outline" : "images-outline"} 
+                size={24} 
+                color="#1a1a1a" 
+              />
+              <Text style={styles.toggleText}>
+                {isCollageMode ? "Model" : "Collage"}
+              </Text>
+            </TouchableOpacity>
           </View>
-          <Pressable style={styles.saveButton} onPress={saveOutfit}>
-            <Text style={styles.saveButtonText}>Save Outfit</Text>
-          </Pressable>
-          <Pressable style={styles.toggleButton} onPress={() => setShowLibrary(true)}>
-            <Text style={styles.toggleText}>My Outfits</Text>
-          </Pressable>
-        </>
+
+          {isCollageMode ? (
+            // COLLAGE MODE
+            <View style={styles.collageWrapper}>
+              <View style={styles.collageCanvas}>
+                {collageItems.map((item) => (
+                  <DraggableItem
+                    key={item.id}
+                    item={item}
+                    onUpdate={updateCollageItem}
+                    onRemove={removeCollageItem}
+                  />
+                ))}
+                {collageItems.length === 0 && (
+                  <View style={styles.collageEmptyState}>
+                    <Ionicons name="images-outline" size={48} color="#ccc" />
+                    <Text style={styles.collageEmptyText}>
+                      Select a category below to add items
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Category Selector */}
+              <View style={styles.categorySelector}>
+                <ScrollView 
+                  horizontal 
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.categorySelectorContent}
+                >
+                  {["Tops", "Bottoms", "Shoes", "Accessories"].map((cat) => (
+                    <TouchableOpacity
+                      key={cat}
+                      onPress={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
+                      style={[
+                        styles.categoryButton,
+                        selectedCategory === cat && styles.categoryButtonActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.categoryButtonText,
+                          selectedCategory === cat && styles.categoryButtonTextActive,
+                        ]}
+                      >
+                        {cat}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+
+              {/* Items Grid */}
+              {selectedCategory && closet[selectedCategory]?.length > 0 && (
+                <ScrollView 
+                  style={styles.itemsScroll}
+                  contentContainerStyle={styles.itemsGrid}
+                >
+                  {closet[selectedCategory].map((item) => (
+                    <TouchableOpacity
+                      key={item.id}
+                      onPress={() => addCollageItem(item)}
+                      style={styles.gridItem}
+                    >
+                      <Image source={{ uri: item.uri }} style={styles.gridItemImage} />
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+          ) : (
+            // MODEL MODE
+            <ScrollView 
+              contentContainerStyle={styles.builderContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.modelContainer}>
+                <View style={styles.modelBody} />
+                {slots.map((slot, i) => {
+                  if (!slot.category) {
+                    return (
+                      <Pressable
+                        key={i}
+                        style={[
+                          i === 0 ? styles.facePlusButton : styles.plusButton, 
+                          { top: 140 * i + 40 }
+                        ]}
+                        onPress={() =>
+                          i === 0 ? pickFaceImage() : pickCategory(i)
+                        }
+                      >
+                        <Ionicons name="add" size={i === 0 ? 40 : 32} color="#fff" />
+                      </Pressable>
+                    );
+                  }
+                  const items = closet[slot.category];
+                  if (!items?.length) return null;
+                  const currentItem = items[slot.index];
+                  if (!currentItem) return null;
+                  
+                  return (
+                    <View
+                      key={i}
+                      style={[styles.slotContainer, { top: 140 * i + 40 }]}
+                    >
+                      <Pressable onPress={() => prevItem(i)}>
+                        <Ionicons name="chevron-back-circle" size={40} color="#1a1a1a" />
+                      </Pressable>
+                      <Pressable onLongPress={() => handleSlotLongPress(i)}>
+                        <Image
+                          source={{ uri: currentItem.uri }}
+                          style={i === 0 ? styles.faceImage : styles.overlayItem}
+                          resizeMode="cover"
+                        />
+                      </Pressable>
+                      <Pressable onPress={() => nextItem(i)}>
+                        <Ionicons
+                          name="chevron-forward-circle"
+                          size={40}
+                          color="#1a1a1a"
+                        />
+                      </Pressable>
+                    </View>
+                  );
+                })}
+              </View>
+
+              {/* Clear and Randomize buttons under the builder */}
+              <View style={styles.builderActions}>
+                <Pressable style={styles.randomizeButton} onPress={randomizeOutfit}>
+                  <Ionicons name="shuffle-outline" size={22} color="#fff" />
+                  <Text style={styles.builderActionText}>Randomize</Text>
+                </Pressable>
+                
+                <Pressable style={styles.clearButtonBuilder} onPress={clearOutfit}>
+                  <Ionicons name="refresh-outline" size={22} color="#fff" />
+                  <Text style={styles.builderActionText}>Clear</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          )}
+
+          <View style={styles.actionContainer}>
+            <Pressable style={styles.saveButton} onPress={saveOutfit}>
+              <Ionicons name="save-outline" size={20} color="#fff" />
+              <Text style={styles.saveButtonText}>Save Outfit</Text>
+            </Pressable>
+
+            <Pressable style={styles.viewButton} onPress={() => setShowLibrary(true)}>
+              <Ionicons name="albums-outline" size={20} color="#1a1a1a" />
+              <Text style={styles.viewButtonText}>My Outfits</Text>
+            </Pressable>
+          </View>
+        </View>
       )}
-    </View>
+
+      {/* Save Outfit Modal */}
+      <Modal transparent visible={saveModalOpen} animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Save Outfit</Text>
+            
+            {existingCategories.length > 0 && (
+              <>
+                <Text style={styles.modalSubtext}>
+                  Select an existing category
+                </Text>
+                <ScrollView style={styles.categoryList} showsVerticalScrollIndicator={false}>
+                  {existingCategories.map((cat) => (
+                    <Pressable
+                      key={cat}
+                      style={[
+                        styles.categoryOption,
+                        selectedExistingCategory === cat && styles.categoryOptionSelected
+                      ]}
+                      onPress={() => {
+                        setSelectedExistingCategory(cat);
+                        setCustomCategoryName("");
+                      }}
+                    >
+                      <Text style={[
+                        styles.categoryOptionText,
+                        selectedExistingCategory === cat && styles.categoryOptionTextSelected
+                      ]}>
+                        {cat}
+                      </Text>
+                      <Text style={styles.categoryOptionCount}>
+                        {savedOutfits[cat].length} outfits
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+                
+                <Text style={styles.orText}>OR</Text>
+              </>
+            )}
+            
+            <Text style={styles.modalSubtext}>
+              Create a new category
+            </Text>
+            <TextInput
+              placeholder="e.g., Casual, Work, Party"
+              value={customCategoryName}
+              onChangeText={(text) => {
+                setCustomCategoryName(text);
+                if (text.trim()) {
+                  setSelectedExistingCategory(null);
+                }
+              }}
+              style={styles.newCategoryInput}
+            />
+            <View style={styles.modalButtons}>
+              <Pressable
+                onPress={() => {
+                  setSaveModalOpen(false);
+                  setCustomCategoryName("");
+                  setSelectedExistingCategory(null);
+                }}
+                style={styles.modalCancelBtn}
+              >
+                <Text style={styles.modalBtnText}>Cancel</Text>
+              </Pressable>
+              <Pressable onPress={confirmSaveOutfit} style={styles.modalSubmitBtn}>
+                <Text style={styles.modalBtnTextPrimary}>Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 }
 
-// STYLES HAVE BEEN UPDATED
+// ... rest of the styles remain the same
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingTop: 50, backgroundColor: "#fff" },
+  container: { 
+    flex: 1, 
+    backgroundColor: "#fafafa" 
+  },
+  builderWrapper: {
+    flex: 1,
+  },
+  simpleHeader: {
+    padding: 16,
+    backgroundColor: "#fafafa",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  simpleHeaderTitle: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#1a1a1a",
+  },
+  toggleButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+  },
+  toggleText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1a1a1a",
+  },
+  // Collage Mode Styles
+  collageWrapper: {
+    flex: 1,
+  },
+  collageCanvas: {
+    height: 400,
+    backgroundColor: "#fff",
+    margin: 16,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: "#e0e0e0",
+    borderStyle: "dashed",
+    position: "relative",
+    overflow: "hidden",
+  },
+  collageEmptyState: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  collageEmptyText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: "#999",
+    fontWeight: "500",
+  },
+  draggableItem: {
+    position: "absolute",
+    width: 120,
+    height: 120,
+  },
+  draggableImageContainer: {
+    width: "100%",
+    height: "100%",
+  },
+  draggableImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+  },
+  categorySelector: {
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  categorySelectorContent: {
+    gap: 8,
+  },
+  categoryButton: {
+    backgroundColor: "#f0f0f0",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  categoryButtonActive: {
+    backgroundColor: "#0066ff",
+    borderColor: "#0066ff",
+  },
+  categoryButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#666",
+  },
+  categoryButtonTextActive: {
+    color: "#fff",
+  },
+  itemsScroll: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  itemsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingBottom: 150,
+  },
+  gridItem: {
+    width: (SCREEN_WIDTH - 48) / 3,
+    height: (SCREEN_WIDTH - 48) / 3,
+    borderRadius: 8,
+    overflow: "hidden",
+    backgroundColor: "#f0f0f0",
+  },
+  gridItemImage: {
+    width: "100%",
+    height: "100%",
+  },
+  // Model Mode Styles
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    width: "100%",
-    paddingHorizontal: 20,
-    marginBottom: 10,
+    justifyContent: "space-between",
+    padding: 16,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderColor: "#eee",
   },
-  title: { fontSize: 22, fontWeight: "bold", marginLeft: 10 },
-  modelContainer: {
-    width: 260,
-    height: 520,
-    marginBottom: 20,
-    position: "relative",
-    alignItems: "center",
-    justifyContent: "flex-start",
+  headerTitle: { 
+    fontSize: 22, 
+    fontWeight: "700" 
   },
-  modelBody: {
-    width: 120,
-    height: 360,
-    backgroundColor: "#ddd",
-    borderRadius: 60,
-    marginTop: 80,
+  emptyState: { 
+    flex: 1, 
+    justifyContent: "center", 
+    alignItems: "center", 
+    padding: 32 
   },
-  slotContainer: {
-    position: 'absolute',
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
+  emptyText: { 
+    fontSize: 18, 
+    fontWeight: "600", 
+    color: "#666", 
+    marginTop: 8 
   },
-  overlayItem: { width: 140, height: 100 },
-  arrowButton: {
-    position: 'absolute',
-    top: '50%',
-    marginTop: -16,
-    zIndex: 10,
+  emptySubtext: { 
+    fontSize: 14, 
+    color: "#999", 
+    marginTop: 4 
   },
-  leftArrow: { left: 20 },
-  rightArrow: { right: 20 },
-  plusButton: {
-    position: "absolute",
-    alignSelf: 'center',
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: "#4B7BEC",
-    justifyContent: "center",
-    alignItems: "center",
+  listContent: { 
+    padding: 16, 
+    paddingBottom: 150 
   },
-  saveButton: {
-    backgroundColor: "#4B7BEC",
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-  },
-  saveButtonText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
-  toggleButton: {
-    marginTop: 15,
-    padding: 12,
-    backgroundColor: "#111",
-    borderRadius: 8,
-  },
-  toggleText: { color: "#fff", fontSize: 16 },
-  
-  // NEW STYLES for the accordion view
   categoryContainer: {
-    width: '100%',
-    paddingHorizontal: 10,
-    marginBottom: 5,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    marginBottom: 12,
+    overflow: "hidden",
   },
   categoryHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#f0f0f0',
-    padding: 15,
-    borderRadius: 8,
-  },
-  categoryTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  // Styles for outfit cards are slightly adjusted
-  outfitCard: {
-    flex: 1/2, // Allows for two columns
-    backgroundColor: "#f9f9f9",
-    margin: 8,
-    padding: 5,
-    borderRadius: 8,
-    justifyContent: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: '#eee',
-    aspectRatio: 1, // Make them square
+    padding: 16,
+    borderBottomWidth: 1,
+    borderColor: "#f0f0f0",
   },
-  thumbnail: { width: 60, height: 60 },
+  categoryTitle: { 
+    fontSize: 18, 
+    fontWeight: "700", 
+    color: "#1a1a1a" 
+  },
+  categoryCount: { 
+    fontSize: 13, 
+    color: "#999", 
+    marginTop: 2 
+  },
+  outfitGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    padding: 8,
+  },
+  builderContent: { 
+    flexGrow: 1, 
+    alignItems: "center", 
+    paddingVertical: 20,
+    paddingBottom: 150,
+    minHeight: 750,
+  },
+  modelContainer: {
+    width: 380,
+    height: 750,
+    position: "relative",
+    alignItems: "center",
+  },
+  modelBody: {
+    width: 180,
+    height: 500,
+    backgroundColor: "#e8e8e8",
+    borderRadius: 90,
+    marginTop: 120,
+  },
+  builderActions: {
+    flexDirection: "row",
+    gap: 18,
+    marginTop: 0,
+    paddingHorizontal: 20,
+  },
+  randomizeButton: {
+    backgroundColor: "#5f27cd",
+    borderRadius: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3.84,
+    elevation: 4,
+  },
+  clearButtonBuilder: {
+    backgroundColor: "#ff4757",
+    borderRadius: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3.84,
+    elevation: 4,
+  },
+  builderActionText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  slotContainer: {
+    position: "absolute",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+    paddingHorizontal: 10,
+  },
+  overlayItem: { 
+    width: 140, 
+    height: 140,
+    borderRadius: 8,
+  },
+  faceImage: {
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    borderWidth: 3,
+    borderColor: "#fff",
+  },
+  plusButton: {
+    position: "absolute",
+    backgroundColor: "#1a1a1a",
+    borderRadius: 50,
+    width: 60,
+    height: 60,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  facePlusButton: {
+    position: "absolute",
+    backgroundColor: "#1a1a1a",
+    borderRadius: 70,
+    width: 140,
+    height: 140,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 3,
+    borderColor: "#fff",
+  },
+  actionContainer: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "space-around",
+    padding: 16,
+    paddingBottom: 85,
+    backgroundColor: "transparent",
+    borderTopWidth: 0,
+    borderColor: "transparent",
+    gap: 12,
+  },
+  saveButton: {
+    backgroundColor: "#1a1a1a",
+    borderRadius: 10,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+    justifyContent: "center",
+  },
+  saveButtonText: { 
+    color: "#fff", 
+    fontWeight: "700", 
+    fontSize: 16 
+  },
+  viewButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#f0f0f0",
+    borderRadius: 10,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    flex: 1,
+    justifyContent: "center",
+  },
+  viewButtonText: { 
+    fontWeight: "700", 
+    color: "#1a1a1a", 
+    fontSize: 16 
+  },
+  outfitCard: {
+    width: "48%",
+    margin: "1%",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#eee",
+    overflow: "hidden",
+  },
+  outfitContent: {
+    padding: 12,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 4,
+  },
+  thumbnail: { 
+    width: 60, 
+    height: 60, 
+    borderRadius: 6 
+  },
+  cardLabel: {
+    fontSize: 12,
+    color: "#777",
+    marginBottom: 12,
+    textAlign: "center",
+    fontWeight: "600",
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalCard: {
+    backgroundColor: "#fff",
+    padding: 24,
+    borderRadius: 16,
+    width: "85%",
+    maxHeight: "80%",
+  },
+  modalTitle: { 
+    fontSize: 20, 
+    fontWeight: "800", 
+    marginBottom: 12 
+  },
+  modalSubtext: { 
+    fontSize: 14, 
+    color: "#666", 
+    marginBottom: 12, 
+    fontWeight: "600" 
+  },
+  categoryList: {
+    maxHeight: 200,
+    marginBottom: 12,
+  },
+  categoryOption: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 14,
+    backgroundColor: "#f8f8f8",
+    borderRadius: 10,
+    marginBottom: 8,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  categoryOptionSelected: {
+    backgroundColor: "#e6f2ff",
+    borderColor: "#1a1a1a",
+  },
+  categoryOptionText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#666",
+  },
+  categoryOptionTextSelected: {
+    color: "#1a1a1a",
+    fontWeight: "700",
+  },
+  categoryOptionCount: {
+    fontSize: 12,
+    color: "#999",
+  },
+  orText: {
+    textAlign: "center",
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#999",
+    marginVertical: 12,
+  },
+  newCategoryInput: {
+    borderWidth: 1.5,
+    borderColor: "#ddd",
+    borderRadius: 10,
+    padding: 14,
+    fontSize: 16,
+    marginBottom: 16,
+  },
+  modalButtons: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  modalCancelBtn: {
+    padding: 14,
+    borderRadius: 10,
+    backgroundColor: "#f0f0f0",
+    flex: 1,
+    alignItems: "center",
+  },
+  modalSubmitBtn: {
+    padding: 14,
+    borderRadius: 10,
+    backgroundColor: "#1a1a1a",
+    flex: 1,
+    alignItems: "center",
+  },
+  modalBtnText: { 
+    color: "#666", 
+    fontWeight: "600", 
+    fontSize: 16 
+  },
+  modalBtnTextPrimary: { 
+    color: "#fff", 
+    fontWeight: "700", 
+    fontSize: 16 
+  },
 });

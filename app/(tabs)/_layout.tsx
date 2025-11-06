@@ -30,14 +30,18 @@ export default function TabsLayout() {
           }}
         />
 
-        {/* This placeholder creates the empty space in the middle */}
+      
+        
         <Tabs.Screen
-          name="placeholder"
+          name="calendar/index"
           options={{
-            tabBarButton: () => <View style={{ width: 70 }} />,
+            title: 'Calendar',
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="calendar-outline" size={size} color={color} />
+            ),
           }}
         />
-        
+
         <Tabs.Screen
           name="profile"
           options={{
@@ -47,17 +51,7 @@ export default function TabsLayout() {
           }}
         />
 
-        
-        <Tabs.Screen
-          name="calendar"
-          options={{
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="calendar-outline" size={size} color={color} />
-            ),
-          }}
-        />
-        
-
+        {/* Hidden plus tab */}
         <Tabs.Screen
           name="plus"
           options={{
@@ -66,7 +60,7 @@ export default function TabsLayout() {
         />
       </Tabs>
 
-      {/* This floating button now sits in the empty space */}
+      {/* Floating + button */}
       <Pressable
         onPress={() => router.push("/(tabs)/plus")}
         style={{
@@ -80,6 +74,10 @@ export default function TabsLayout() {
           alignItems: "center",
           justifyContent: "center",
           elevation: 6,
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.3,
+          shadowRadius: 4,
         }}
       >
         <Ionicons name="add" size={36} color="white" />

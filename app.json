@@ -2,7 +2,9 @@
   "expo": {
     "name": "virtual_closet_app",
     "slug": "virtual_closet_app",
-    "scheme": [ "virtualclosetapp" ],
+    "scheme": [
+      "virtualclosetapp"
+    ],
     "plugins": [
       "expo-camera",
       "expo-router",
@@ -15,7 +17,8 @@
         }
       ],
       "@react-native-firebase/app",
-      "@react-native-firebase/auth"
+      "@react-native-firebase/auth",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true
@@ -45,7 +48,11 @@
       },
       "package": "com.galaxies.firebase",
       "edgeToEdgeEnabled": true,
-      "permissions": ["CAMERA", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
