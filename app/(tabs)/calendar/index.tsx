@@ -25,6 +25,10 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 
+import { useRecommendations } from "../../../hooks/useRecommendations"
+import { useCloset } from "app/ClosetProvider";
+import RecommendationList from "components/RecommendationList";
+
 type OutfitItem = { category: string; uri: string; slotIndex: number };
 type SavedOutfit = { id: string; outfit: OutfitItem[]; category: string };
 type OutfitCategories = Record<string, SavedOutfit[]>;
@@ -38,6 +42,17 @@ type CalendarEvent = {
   uid: string;
 };
 
+const getTodayDateString = (): string => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const [selectedDate, setSelectedDate] = useState(getTodayDateString());
+
+
 export default function CalendarScreen() {
   const [user, setUser] = useState<any>(null);
   const [selectedDate, setSelectedDate] = useState("");
@@ -49,6 +64,13 @@ export default function CalendarScreen() {
   const [selectedDateEvent, setSelectedDateEvent] = useState<CalendarEvent | null>(null);
   const [viewMode, setViewMode] = useState<"week" | "month">("week");
   const [currentWeek, setCurrentWeek] = useState<string[]>([]);
+
+
+  
+  const { loading, desiredTags, outfits: recOutfits } = 
+    useRecommendations(selectedDate, 5);
+
+  
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (firebaseUser) => {

@@ -1,5 +1,9 @@
 // hooks/useRecommendations.ts
 import { differenceInCalendarDays } from "date-fns";
+import { useMemo } from "react"
+import { getOccasionTagsForDate } from "lib/calendarTags";
+import { RecommendableOutfit, recommendOutfits } from "lib/recs";
+import { useCloset } from "app/ClosetProvider";
 
 export type Outfit = {
   id: string; name: string;
@@ -79,3 +83,73 @@ export function rankOutfits(
   }
   return results;
 }
+
+export function useRecommendations(dateString: string, limit = 5) {
+  // 👇 get outfits from your closet context
+  const { outfits } = useCloset() as {
+    outfits?: RecommendableOutfit[];
+  };
+
+  // Always work with a real Date object internally
+  const date = useMemo(() => parseDateString(dateString), [dateString]);
+
+  const desiredTags = useMemo(
+    () => getOccasionTagsForDate(date),
+    [date]
+  );
+
+  const recOutfits = useMemo(
+    () =>
+      recommendOutfits((outfits ?? []) as RecommendableOutfit[], {
+        desiredTags,
+        limit,
+      }),
+    [outfits, desiredTags, limit]
+  );
+
+  return {
+    loading: false,
+    desiredTags,
+    outfits: recOutfits,
+  };
+}
+
+function normalizeToDate(input?: Date | string | null): Date {
+  if (input instanceof Date) {
+    return input;
+  }
+
+  if (typeof input === "string") {
+    const parsed = new Date(input);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
+  // Fallback: "today"
+  return new Date();
+}
+
+function parseDateString(dateString: string): Date {
+
+  if (!dateString) {
+    return new Date();
+  }
+
+  const parts = dateString.split("-");
+  if (parts.length !== 3) {
+    return new Date();
+  }
+
+  const [year, month, day] = parts.map(Number);
+  const d = new Date(year, month - 1, day);
+
+  if (Number.isNaN(d.getTime())) {
+    return new Date();
+  }
+
+  return d;
+}
+
+
+

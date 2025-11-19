@@ -13,6 +13,17 @@ export default function TabsLayout() {
           tabBarStyle: { height: 64, position: "absolute" },
         }}
       >
+
+        <Tabs.Screen
+          name="calendar/index"
+          options={{
+            title: 'Calendar',
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="calendar-outline" size={size} color={color} />
+            ),
+          }}
+        />
+        
         <Tabs.Screen
           name="closet"
           options={{
@@ -32,15 +43,7 @@ export default function TabsLayout() {
 
       
         
-        <Tabs.Screen
-          name="calendar/index"
-          options={{
-            title: 'Calendar',
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="calendar-outline" size={size} color={color} />
-            ),
-          }}
-        />
+        
 
         <Tabs.Screen
           name="profile"
