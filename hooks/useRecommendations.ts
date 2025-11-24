@@ -85,27 +85,23 @@ export function rankOutfits(
 }
 
 export function useRecommendations(dateString: string, limit = 5) {
-  // 👇 get outfits from your closet context
   const { outfits } = useCloset() as {
     outfits?: RecommendableOutfit[];
   };
 
-  // Always work with a real Date object internally
-  const date = useMemo(() => parseDateString(dateString), [dateString]);
+  // 👇 TEMP: ignore the date, force dressy
+  const desiredTags = ["dressy"];
 
-  const desiredTags = useMemo(
-    () => getOccasionTagsForDate(date),
-    [date]
-  );
+  const recOutfits = useMemo(() => {
+    const baseOutfits = (outfits ?? []) as RecommendableOutfit[];
+    console.log("TEST desiredTags:", desiredTags);
+    console.log("TEST baseOutfits:", baseOutfits);
 
-  const recOutfits = useMemo(
-    () =>
-      recommendOutfits((outfits ?? []) as RecommendableOutfit[], {
-        desiredTags,
-        limit,
-      }),
-    [outfits, desiredTags, limit]
-  );
+    // 👇 TEMP: ignore recommendOutfits and just return outfits directly
+    const recs = baseOutfits.slice(0, limit);
+    console.log("TEST recOutfits:", recs);
+    return recs;
+  }, [outfits, limit]);
 
   return {
     loading: false,

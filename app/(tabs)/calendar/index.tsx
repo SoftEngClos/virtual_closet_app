@@ -25,13 +25,40 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 
-import { useRecommendations } from "../../../hooks/useRecommendations"
+
 import { useCloset } from "app/ClosetProvider";
 import RecommendationList from "components/RecommendationList";
+import { getOccasionTagsForDate } from "lib/calendarTags";
+import { useRouter } from "expo-router";
+import { type RecommendableOutfit, recommendOutfits } from "lib/recs";
+
+
+
 
 type OutfitItem = { category: string; uri: string; slotIndex: number };
 type SavedOutfit = { id: string; outfit: OutfitItem[]; category: string };
 type OutfitCategories = Record<string, SavedOutfit[]>;
+
+type QuickOptionId = "weekday" | "weekend" | "gym" | "dressy";
+
+type QuickOption = {
+  id: QuickOptionId;
+  label: string;
+  extraTags: string[];
+};
+
+const QUICK_OPTIONS: { id: QuickOptionId; label: string; extraTags: string[] }[] = [
+  {id: "weekday", label: "Weekday", extraTags: ["weekday"]},
+  {id: "weekend", label: "Weekend", extraTags: ["weekend"]},
+  {id: "gym", label: "Gym / Active", extraTags: ["gym", "athleisure"]},
+  {id: "dressy", label: "Dressy", extraTags: ["formal", "dressy"]},
+
+];
+
+
+
+
+
 
 type CalendarEvent = {
   id: string;
@@ -50,12 +77,11 @@ const getTodayDateString = (): string => {
   return `${year}-${month}-${day}`;
 };
 
-const [selectedDate, setSelectedDate] = useState(getTodayDateString());
 
 
 export default function CalendarScreen() {
   const [user, setUser] = useState<any>(null);
-  const [selectedDate, setSelectedDate] = useState("");
+  const [selectedDate, setSelectedDate] = useState(getTodayDateString());
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [markedDates, setMarkedDates] = useState<any>({});
   const [modalVisible, setModalVisible] = useState(false);
@@ -65,12 +91,58 @@ export default function CalendarScreen() {
   const [viewMode, setViewMode] = useState<"week" | "month">("week");
   const [currentWeek, setCurrentWeek] = useState<string[]>([]);
 
+  const router = useRouter();
 
+  const {outfits, setPendingRecommendedOutfit } = useCloset();
   
-  const { loading, desiredTags, outfits: recOutfits } = 
-    useRecommendations(selectedDate, 5);
 
-  
+  const [selectedQuickOption, setSelectedQuickOption] = useState<QuickOptionId>("weekday");
+
+
+
+const handleQuickOptionPress = (opt: QuickOption) => {
+  if (!selectedDate) {
+    Alert.alert("Pick a date", "Please tap a date on the calendar first.");
+    return;
+  }
+
+  // 1) Update which quick option is selected (for UI if you want later)
+  setSelectedQuickOption(opt.id);
+
+  // 2) Build base tags from the date (weekday/weekend, weather, etc.)
+  const date = selectedDate ? new Date(selectedDate) : new Date();
+  const baseTags = getOccasionTagsForDate(date);
+
+  // 3) Combine with the quick option's extra tags
+  const desiredTags = [...baseTags, ...opt.extraTags];
+
+  // 4) Call the recommender with outfits from ClosetProvider
+  const recs = recommendOutfits(outfits ?? [], {
+    desiredTags,
+    limit: 5,
+  });
+
+  console.log("Quick option desiredTags:", desiredTags);
+  console.log("Recs from recommendOutfits:", recs);
+
+  if (!recs || recs.length === 0) {
+    Alert.alert(
+      "No outfit found",
+      "We couldn't find a good match for that option yet. Try adding more outfits or changing the filter."
+    );
+    return;
+  }
+
+  const primary: RecommendableOutfit = recs[0];
+
+  // 5) Store this outfit in context so the next screen can use it
+  setPendingRecommendedOutfit(primary);
+
+  // 6) Navigate to wherever you show the generated outfit
+  router.push("/add-item");
+};
+
+ 
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (firebaseUser) => {
@@ -114,13 +186,6 @@ export default function CalendarScreen() {
     setMarkedDates(marked);
   }, [events, selectedDate]);
 
-  const getTodayDateString = (): string => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  };
 
   const formatDateString = (dateString: string): string => {
     const [year, month, day] = dateString.split("-").map(Number);
@@ -521,6 +586,25 @@ export default function CalendarScreen() {
                 textDayHeaderFontWeight: "600",
               }}
             />
+
+            <View style={styles.recContainer}>
+              <Text style={styles.recTitle}>What outfit would you like to generate?</Text>
+
+              <View style={styles.recButtonsRow}>
+                {QUICK_OPTIONS.map((opt) => (
+                  <TouchableOpacity
+                    key={opt.id}
+                    style={styles.recButton}
+                    onPress={() => handleQuickOptionPress(opt)}
+                  >
+                    <Text style={styles.recButtonLabel}>{opt.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+
+            
 
             {selectedDate && (
               <View style={styles.selectedDateContainer}>
@@ -1040,4 +1124,30 @@ const styles = StyleSheet.create({
     color: "#999",
     marginTop: 2,
   },
+  recContainer: {
+  marginTop: 20,
+  paddingHorizontal: 16,
+},
+recTitle: {
+  fontSize: 16,
+  fontWeight: "600",
+  marginBottom: 8,
+},
+recButtonsRow: {
+  flexDirection: "row",
+  flexWrap: "wrap",
+},
+recButton: {
+  borderWidth: 1,
+  borderColor: "#aaa",
+  paddingHorizontal: 12,
+  paddingVertical: 8,
+  borderRadius: 20,
+  marginRight: 8,
+  marginBottom: 8,
+},
+recButtonLabel: {
+  fontSize: 14,
+},
+
 });

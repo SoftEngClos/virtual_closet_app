@@ -17,6 +17,12 @@ import { onAuthStateChanged, User } from "firebase/auth";
 
 import * as ImageManipulator from "expo-image-manipulator";
 
+import type { Outfit } from "hooks/useRecommendations";
+import type { RecommendableOutfit } from "lib/recs";
+
+
+
+
 
 type ClosetItem = {
   id: string;
@@ -41,9 +47,14 @@ type Storage = {
   items: StorageItem[];
 };
 
+
+
 type ClosetContextType = {
   closet: Record<string, ClosetItem[]>;
   storages: Storage[];
+  outfits: RecommendableOutfit[];
+
+
   addItem: (item: Omit<ClosetItem, "id">) => Promise<void>;
   removeItem: (id: string, category: string) => Promise<void>;
   addTag: (id: string, category: string, tag: string) => Promise<void>;
@@ -55,7 +66,13 @@ type ClosetContextType = {
   renameStorage: (storageId: string, newName: string) => Promise<void>;
   addItemToStorage: (storageId: string, itemId: string, category: string) => Promise<void>;
   removeItemFromStorage: (storageId: string, itemId: string) => Promise<void>;
+  pendingRecommendedOutfit: RecommendableOutfit | null;
+  setPendingRecommendedOutfit: React.Dispatch<React.SetStateAction<RecommendableOutfit | null>>;
 };
+
+
+
+
 
 const ClosetContext = createContext<ClosetContextType | undefined>(undefined);
 
@@ -71,6 +88,11 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const [storages, setStorages] = useState<Storage[]>([]);
   const [user, setUser] = useState<User | null>(null);
+  const [outfits, setOutfits] = useState<RecommendableOutfit[]>([]);
+
+
+  const [pendingRecommendedOutfit, setPendingRecommendedOutfit] = React.useState<RecommendableOutfit | null>(null);
+
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -78,6 +100,7 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
         setUser(firebaseUser);
         await loadUserCloset(firebaseUser.uid);
         await loadUserStorages(firebaseUser.uid);
+        await loadUserOutfits(firebaseUser.uid);
       } else {
         setUser(null);
         setCloset({
@@ -87,6 +110,8 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
           Accessories: [],
         });
         setStorages([]);
+        setOutfits([]);
+        
       }
     });
 
@@ -149,6 +174,58 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
       console.error("Error loading storages:", error);
     }
   };
+
+  const loadUserOutfits = async (userId: string) => {
+    try {
+      const q = query(
+        collection(db, "outfits"),       // top-level collection
+        where("uid", "==", userId)       // matches your rules
+      );
+
+      const snap = await getDocs(q);
+
+      const loaded: RecommendableOutfit[] = [];
+
+      snap.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+
+        // category: "dressy" → tags: ["dressy"]
+        const rawCategory =
+          typeof data.category === "string" ? data.category.trim() : "";
+        const normalizedCategory = rawCategory.toLowerCase();
+
+        const tags: string[] = normalizedCategory ? [normalizedCategory] : [];
+
+        // use first clothing slot as thumbnail
+        const firstSlot =
+          Array.isArray(data.outfit) && data.outfit.length > 0
+            ? data.outfit[0]
+            : null;
+        const thumbnailUrl: string | undefined = firstSlot?.uri;
+
+        loaded.push({
+          id: docSnap.id,
+          name: rawCategory
+            ? `${rawCategory.charAt(0).toUpperCase()}${rawCategory
+                .slice(1)
+                .toLowerCase()} outfit` // e.g. "Dressy outfit"
+            : "Outfit",
+          tags,
+          itemIds: [],          // you don't store item IDs yet, so leave empty
+          thumbnailUrl,
+          usageCount: data.usageCount ?? 0,
+          lastWorn: data.lastWorn, // if you ever add it
+          colors: data.colors ?? [],
+          warmth: data.warmth,
+        });
+      });
+
+    console.log("Loaded outfits for recs:", loaded);
+    setOutfits(loaded);
+  } catch (error) {
+    console.error("Error loading outfits:", error);
+  }
+};
 
   const saveStorages = async (newStorages: Storage[]) => {
     if (!user) return;
@@ -509,11 +586,14 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  
+
   return (
     <ClosetContext.Provider
       value={{
         closet,
         storages,
+        outfits,
         addItem,
         removeItem,
         addTag,
@@ -525,6 +605,9 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
         renameStorage,
         addItemToStorage,
         removeItemFromStorage,
+
+        pendingRecommendedOutfit,
+        setPendingRecommendedOutfit,
       }}
     >
       {children}
