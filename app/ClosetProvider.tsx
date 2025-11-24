@@ -1,4 +1,10 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { auth, db, storage } from "../firebaseConfig";
 import {
   collection,
@@ -12,17 +18,17 @@ import {
   setDoc,
   getDoc,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import {
+  ref,
+  uploadBytes,
+  getDownloadURL,
+  deleteObject,
+} from "firebase/storage";
 import { onAuthStateChanged, User } from "firebase/auth";
 
 import * as ImageManipulator from "expo-image-manipulator";
 
-import type { Outfit } from "hooks/useRecommendations";
 import type { RecommendableOutfit } from "lib/recs";
-
-
-
-
 
 type ClosetItem = {
   id: string;
@@ -47,32 +53,44 @@ type Storage = {
   items: StorageItem[];
 };
 
-
-
 type ClosetContextType = {
   closet: Record<string, ClosetItem[]>;
   storages: Storage[];
   outfits: RecommendableOutfit[];
 
+  // global tag palette for reuse
+  availableTags: string[];
 
   addItem: (item: Omit<ClosetItem, "id">) => Promise<void>;
   removeItem: (id: string, category: string) => Promise<void>;
   addTag: (id: string, category: string, tag: string) => Promise<void>;
   removeTag: (id: string, category: string, tag: string) => Promise<void>;
-  updateItemDetails: (id: string, category: string, details: { brand?: string; price?: number }) => Promise<void>;
+  updateItemDetails: (
+    id: string,
+    category: string,
+    details: { brand?: string; price?: number }
+  ) => Promise<void>;
   uploadImageToStorage: (uri: string, category: string) => Promise<string>;
+
   addStorage: (name: string) => Promise<void>;
   deleteStorage: (storageId: string) => Promise<void>;
   renameStorage: (storageId: string, newName: string) => Promise<void>;
-  addItemToStorage: (storageId: string, itemId: string, category: string) => Promise<void>;
-  removeItemFromStorage: (storageId: string, itemId: string) => Promise<void>;
+  addItemToStorage: (
+    storageId: string,
+    itemId: string,
+    category: string
+  ) => Promise<void>;
+  removeItemFromStorage: (
+    storageId: string,
+    itemId: string
+  ) => Promise<void>;
+
+  // recommendation flow
   pendingRecommendedOutfit: RecommendableOutfit | null;
-  setPendingRecommendedOutfit: React.Dispatch<React.SetStateAction<RecommendableOutfit | null>>;
+  setPendingRecommendedOutfit: React.Dispatch<
+    React.SetStateAction<RecommendableOutfit | null>
+  >;
 };
-
-
-
-
 
 const ClosetContext = createContext<ClosetContextType | undefined>(undefined);
 
@@ -89,10 +107,21 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
   const [storages, setStorages] = useState<Storage[]>([]);
   const [user, setUser] = useState<User | null>(null);
   const [outfits, setOutfits] = useState<RecommendableOutfit[]>([]);
+  const [pendingRecommendedOutfit, setPendingRecommendedOutfit] =
+    useState<RecommendableOutfit | null>(null);
 
+  // ✅ collect all distinct tags from items so we can reuse them
+  const availableTags = useMemo(() => {
+    const set = new Set<string>();
 
-  const [pendingRecommendedOutfit, setPendingRecommendedOutfit] = React.useState<RecommendableOutfit | null>(null);
+    Object.values(closet).forEach((items) => {
+      items.forEach((item) => {
+        (item.tags || []).forEach((t) => set.add(t));
+      });
+    });
 
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [closet]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -111,7 +140,7 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
         });
         setStorages([]);
         setOutfits([]);
-        
+        setPendingRecommendedOutfit(null);
       }
     });
 
@@ -120,10 +149,7 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const loadUserCloset = async (userId: string) => {
     try {
-      const q = query(
-        collection(db, "closet"),
-        where("uid", "==", userId)
-      );
+      const q = query(collection(db, "closet"), where("uid", "==", userId));
 
       const querySnapshot = await getDocs(q);
       const items: Record<string, ClosetItem[]> = {
@@ -164,7 +190,9 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
 
       if (docSnap.exists()) {
         const data = docSnap.data();
-        setStorages(data.storages || [{ id: "1", name: "Storage", items: [] }]);
+        setStorages(
+          data.storages || [{ id: "1", name: "Storage", items: [] }]
+        );
       } else {
         const defaultStorages = [{ id: "1", name: "Storage", items: [] }];
         await setDoc(docRef, { storages: defaultStorages });
@@ -178,8 +206,8 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
   const loadUserOutfits = async (userId: string) => {
     try {
       const q = query(
-        collection(db, "outfits"),       // top-level collection
-        where("uid", "==", userId)       // matches your rules
+        collection(db, "outfits"),
+        where("uid", "==", userId)
       );
 
       const snap = await getDocs(q);
@@ -189,14 +217,12 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
       snap.forEach((docSnap) => {
         const data = docSnap.data() as any;
 
-        // category: "dressy" → tags: ["dressy"]
         const rawCategory =
           typeof data.category === "string" ? data.category.trim() : "";
         const normalizedCategory = rawCategory.toLowerCase();
 
         const tags: string[] = normalizedCategory ? [normalizedCategory] : [];
 
-        // use first clothing slot as thumbnail
         const firstSlot =
           Array.isArray(data.outfit) && data.outfit.length > 0
             ? data.outfit[0]
@@ -208,24 +234,24 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
           name: rawCategory
             ? `${rawCategory.charAt(0).toUpperCase()}${rawCategory
                 .slice(1)
-                .toLowerCase()} outfit` // e.g. "Dressy outfit"
+                .toLowerCase()} outfit`
             : "Outfit",
           tags,
-          itemIds: [],          // you don't store item IDs yet, so leave empty
+          itemIds: [],
           thumbnailUrl,
           usageCount: data.usageCount ?? 0,
-          lastWorn: data.lastWorn, // if you ever add it
+          lastWorn: data.lastWorn,
           colors: data.colors ?? [],
           warmth: data.warmth,
         });
       });
 
-    console.log("Loaded outfits for recs:", loaded);
-    setOutfits(loaded);
-  } catch (error) {
-    console.error("Error loading outfits:", error);
-  }
-};
+      console.log("Loaded outfits for recs:", loaded);
+      setOutfits(loaded);
+    } catch (error) {
+      console.error("Error loading outfits:", error);
+    }
+  };
 
   const saveStorages = async (newStorages: Storage[]) => {
     if (!user) return;
@@ -242,94 +268,89 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const deleteImageFromStorage = async (imageUrl: string) => {
     if (!imageUrl) return;
-    
+
     try {
       console.log("Attempting to delete image:", imageUrl);
-      
+
       const imageRef = ref(storage, imageUrl);
       await deleteObject(imageRef);
-      
+
       console.log("✅ Image deleted from Firebase Storage:", imageUrl);
     } catch (error: any) {
       console.error("Error deleting image from storage:", error);
-      
-      if (error.code !== 'storage/object-not-found') {
+
+      if (error.code !== "storage/object-not-found") {
         console.error("Failed to delete, but continuing...");
       }
     }
   };
 
   const uploadImageToStorage = async (
-     uri: string,
-  category: string
-): Promise<string> => {
-  if (!user) throw new Error("User not authenticated");
+    uri: string,
+    category: string
+  ): Promise<string> => {
+    if (!user) throw new Error("User not authenticated");
 
-  const lower = uri.toLowerCase();
-  // default to png for our cropped output; switch to jpg if the URI clearly says so
-  let intendedExt: "png" | "jpg" =
-    lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? "jpg" : "png";
+    const lower = uri.toLowerCase();
+    let intendedExt: "png" | "jpg" =
+      lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? "jpg" : "png";
 
-  // 1) Read the URI into a Blob
-  let res = await fetch(uri);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch image: ${res.status} ${res.statusText}`);
-  }
-  let blob = await res.blob();
-  if (!blob || blob.size === 0) throw new Error("Invalid image blob - size is 0");
+    let res = await fetch(uri);
+    if (!res.ok) {
+      throw new Error(
+        `Failed to fetch image: ${res.status} ${res.statusText}`
+      );
+    }
+    let blob = await res.blob();
+    if (!blob || blob.size === 0)
+      throw new Error("Invalid image blob - size is 0");
 
-  // 2) If blob.type is missing or not image/*, re-encode to PNG
-  let typeOk = !!blob.type && blob.type.startsWith("image/");
-  if (!typeOk) {
-    const encoded = await ImageManipulator.manipulateAsync(
-      uri,
-      [], // no ops, just re-encode
-      { compress: 1, format: ImageManipulator.SaveFormat.PNG }
-    );
-    res = await fetch(encoded.uri);
-    blob = await res.blob();
-    intendedExt = "png";
-  }
+    let typeOk = !!blob.type && blob.type.startsWith("image/");
+    if (!typeOk) {
+      const encoded = await ImageManipulator.manipulateAsync(
+        uri,
+        [],
+        { compress: 1, format: ImageManipulator.SaveFormat.PNG }
+      );
+      res = await fetch(encoded.uri);
+      blob = await res.blob();
+      intendedExt = "png";
+    }
 
-  // 3) Handle HEIC (convert to JPEG)
-  let contentType =
-    blob.type && blob.type.startsWith("image/") ? blob.type : undefined;
+    let contentType =
+      blob.type && blob.type.startsWith("image/") ? blob.type : undefined;
 
-  if (contentType?.includes("heic")) {
-    const jpeg = await ImageManipulator.manipulateAsync(
-      uri,
-      [],
-      { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
-    );
-    res = await fetch(jpeg.uri);
-    blob = await res.blob();
-    contentType = "image/jpeg";
-    intendedExt = "jpg";
-  }
+    if (contentType?.includes("heic")) {
+      const jpeg = await ImageManipulator.manipulateAsync(
+        uri,
+        [],
+        { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      res = await fetch(jpeg.uri);
+      blob = await res.blob();
+      contentType = "image/jpeg";
+      intendedExt = "jpg";
+    }
 
-  // 4) Finalize contentType if still unknown
-  if (!contentType) {
-    contentType = intendedExt === "png" ? "image/png" : "image/jpeg";
-  }
+    if (!contentType) {
+      contentType = intendedExt === "png" ? "image/png" : "image/jpeg";
+    }
 
-  // 5) Build a filename that matches the real bytes
-  const filename = `${Date.now()}_${category}.${intendedExt}`;
-  const storagePath = `users/${user.uid}/closet/${category}/${filename}`;
-  const sref = ref(storage, storagePath);
+    const filename = `${Date.now()}_${category}.${intendedExt}`;
+    const storagePath = `users/${user.uid}/closet/${category}/${filename}`;
+    const sref = ref(storage, storagePath);
 
-  // 6) Upload with correct metadata
-  await uploadBytes(sref, blob, {
-    contentType,
-    customMetadata: {
-      uploadedAt: new Date().toISOString(),
-      category,
-    },
-  });
+    await uploadBytes(sref, blob, {
+      contentType,
+      customMetadata: {
+        uploadedAt: new Date().toISOString(),
+        category,
+      },
+    });
 
-  // 7) Public URL to render in <Image>
-  const downloadURL = await getDownloadURL(sref);
-  return downloadURL;
-};
+    const downloadURL = await getDownloadURL(sref);
+    return downloadURL;
+  };
 
   const addItem = async (item: Omit<ClosetItem, "id">) => {
     if (!user) {
@@ -372,9 +393,9 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
 
     try {
       console.log(`Attempting to delete item ${id} from category ${category}`);
-      
+
       const item = closet[category]?.find((i) => i.id === id);
-      
+
       if (item) {
         console.log("Item found, deleting image:", item.uri);
         await deleteImageFromStorage(item.uri);
@@ -389,8 +410,10 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
         ...prev,
         [category]: (prev[category] || []).filter((i) => i.id !== id),
       }));
-      
-      console.log("✅ Item successfully deleted from Firestore and Firebase Storage");
+
+      console.log(
+        "✅ Item successfully deleted from Firestore and Firebase Storage"
+      );
     } catch (error) {
       console.error("❌ Error removing item:", error);
       throw error;
@@ -460,7 +483,9 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
       setCloset((prev) => ({
         ...prev,
         [category]: (prev[category] || []).map((i) =>
-          i.id === id ? { ...i, brand: details.brand, price: details.price } : i
+          i.id === id
+            ? { ...i, brand: details.brand, price: details.price }
+            : i
         ),
       }));
     } catch (error) {
@@ -492,41 +517,46 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
 
     try {
       console.log(`Deleting storage ${storageId}`);
-      
+
       const storageToDelete = storages.find((s) => s.id === storageId);
-      
+
       if (storageToDelete && storageToDelete.items.length > 0) {
-        console.log(`Storage contains ${storageToDelete.items.length} items, deleting all...`);
-        
+        console.log(
+          `Storage contains ${storageToDelete.items.length} items, deleting all...`
+        );
+
         const deletePromises = storageToDelete.items.map(async (storedItem) => {
           const item = closet[storedItem.category]?.find(
             (i) => i.id === storedItem.itemId
           );
           if (item) {
-            console.log(`Deleting item ${storedItem.itemId} and its image`);
+            console.log(
+              `Deleting item ${storedItem.itemId} and its image`
+            );
             await deleteImageFromStorage(item.uri);
             await deleteDoc(doc(db, "closet", storedItem.itemId));
           }
         });
-        
+
         await Promise.all(deletePromises);
-        
+
         setCloset((prev) => {
           const newCloset = { ...prev };
           storageToDelete.items.forEach((storedItem) => {
-            newCloset[storedItem.category] = newCloset[storedItem.category]?.filter(
-              (item) => item.id !== storedItem.itemId
-            ) || [];
+            newCloset[storedItem.category] =
+              newCloset[storedItem.category]?.filter(
+                (item) => item.id !== storedItem.itemId
+              ) || [];
           });
           return newCloset;
         });
-        
+
         console.log("✅ All items deleted from storage");
       }
 
       const updatedStorages = storages.filter((s) => s.id !== storageId);
       await saveStorages(updatedStorages);
-      
+
       console.log("✅ Storage successfully deleted");
     } catch (error) {
       console.error("❌ Error deleting storage:", error);
@@ -548,7 +578,11 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  const addItemToStorage = async (storageId: string, itemId: string, category: string) => {
+  const addItemToStorage = async (
+    storageId: string,
+    itemId: string,
+    category: string
+  ) => {
     if (!user) return;
 
     try {
@@ -570,7 +604,10 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  const removeItemFromStorage = async (storageId: string, itemId: string) => {
+  const removeItemFromStorage = async (
+    storageId: string,
+    itemId: string
+  ) => {
     if (!user) return;
 
     try {
@@ -586,14 +623,13 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  
-
   return (
     <ClosetContext.Provider
       value={{
         closet,
         storages,
         outfits,
+        availableTags,
         addItem,
         removeItem,
         addTag,
@@ -605,7 +641,6 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
         renameStorage,
         addItemToStorage,
         removeItemFromStorage,
-
         pendingRecommendedOutfit,
         setPendingRecommendedOutfit,
       }}

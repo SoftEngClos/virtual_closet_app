@@ -49,7 +49,7 @@ export default function AddItem() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.header}>Add Clothing Item</Text>
+      <Text style={styles.header}>Add Cloth Item</Text>
 
       {uri ? (
         <Image source={{ uri }} style={styles.preview} resizeMode="cover" />

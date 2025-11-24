@@ -1,9 +1,8 @@
-﻿import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
-  
   FlatList,
   StyleSheet,
   Alert,
@@ -16,11 +15,13 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useCloset } from "../ClosetProvider";
-
 import { Image } from "expo-image";
 
 const CATEGORIES = ["Tops", "Bottoms", "Shoes", "Accessories"];
 
+// -------------------------
+// Tag Chips Component
+// -------------------------
 function TagChips({
   tags,
   onRemove,
@@ -39,6 +40,9 @@ function TagChips({
   );
 }
 
+// -------------------------
+// MAIN CLOSET SCREEN
+// -------------------------
 const ClosetScreen = () => {
   const {
     closet,
@@ -54,12 +58,13 @@ const ClosetScreen = () => {
     renameStorage,
     addItemToStorage,
     removeItemFromStorage,
+    availableTags,
   } = useCloset();
 
   const [uploading, setUploading] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Combined details modal states
+  // Details modal
   const [detailsModalOpen, setDetailsModalOpen] = useState(false);
   const [detailsTarget, setDetailsTarget] = useState<{ id: string; category: string } | null>(null);
   const [tagText, setTagText] = useState("");
@@ -67,6 +72,14 @@ const ClosetScreen = () => {
   const [priceText, setPriceText] = useState("");
   const [currentTags, setCurrentTags] = useState<string[]>([]);
 
+  const tagSuggestions = useMemo(() => {
+    const needle = tagText.trim().toLowerCase();
+    return availableTags.filter(
+      (t) => !currentTags.includes(t) && (!needle || t.toLowerCase().includes(needle))
+    );
+  }, [availableTags, currentTags, tagText]);
+
+  // Storage modal logic
   const [storageModalOpen, setStorageModalOpen] = useState(false);
   const [storageName, setStorageName] = useState("");
   const [selectedStorage, setSelectedStorage] = useState(storages[0]);
@@ -77,25 +90,17 @@ const ClosetScreen = () => {
   const [editStorageName, setEditStorageName] = useState("");
   const [editingStorageId, setEditingStorageId] = useState<string | null>(null);
 
-  // Update selectedStorage when storages change - FIXED
+  // Sync storage selection
   useEffect(() => {
-    if (storages.length > 0) {
-      if (selectedStorage) {
-        // Find and update the currently selected storage
-        const updatedSelectedStorage = storages.find(s => s.id === selectedStorage.id);
-        if (updatedSelectedStorage) {
-          setSelectedStorage(updatedSelectedStorage);
-        } else {
-          // If selected storage was deleted, select first one
-          setSelectedStorage(storages[0]);
-        }
-      } else {
-        // No storage selected, select first one
-        setSelectedStorage(storages[0]);
-      }
-    }
+    if (storages.length === 0) return;
+
+    const updated = storages.find((s) => s.id === selectedStorage?.id);
+    setSelectedStorage(updated || storages[0]);
   }, [storages]);
 
+  // -------------------------
+  // OPEN DETAILS MODAL
+  // -------------------------
   const openDetailsModal = (id: string, category: string) => {
     const item = closet[category]?.find((i) => i.id === id);
     setDetailsTarget({ id, category });
@@ -106,15 +111,22 @@ const ClosetScreen = () => {
     setDetailsModalOpen(true);
   };
 
+  const handleQuickAddTag = (t: string) => {
+    if (!currentTags.includes(t)) {
+      setCurrentTags([...currentTags, t]);
+    }
+  };
+
   const addTagToList = () => {
-    if (tagText.trim() && !currentTags.includes(tagText.trim())) {
-      setCurrentTags([...currentTags, tagText.trim()]);
+    const cleaned = tagText.trim();
+    if (cleaned && !currentTags.includes(cleaned)) {
+      setCurrentTags([...currentTags, cleaned]);
       setTagText("");
     }
   };
 
-  const removeTagFromList = (tag: string) => {
-    setCurrentTags(currentTags.filter(t => t !== tag));
+  const removeTagFromList = (t: string) => {
+    setCurrentTags(currentTags.filter((x) => x !== t));
   };
 
   const submitDetails = async () => {
@@ -124,254 +136,142 @@ const ClosetScreen = () => {
       const price = priceText.trim() ? parseFloat(priceText) : undefined;
       const brand = brandText.trim() || undefined;
 
-      // Update brand and price
-      await updateItemDetails(detailsTarget.id, detailsTarget.category, {
-        brand,
-        price,
-      });
+      await updateItemDetails(detailsTarget.id, detailsTarget.category, { brand, price });
 
-      // Get current item tags
       const item = closet[detailsTarget.category]?.find((i) => i.id === detailsTarget.id);
       const oldTags = item?.tags || [];
 
-      // Add new tags
-      const tagsToAdd = currentTags.filter(t => !oldTags.includes(t));
-      for (const tag of tagsToAdd) {
-        await addTag(detailsTarget.id, detailsTarget.category, tag);
+      // Add new
+      for (const t of currentTags.filter((x) => !oldTags.includes(x))) {
+        await addTag(detailsTarget.id, detailsTarget.category, t);
       }
 
-      // Remove deleted tags
-      const tagsToRemove = oldTags.filter(t => !currentTags.includes(t));
-      for (const tag of tagsToRemove) {
-        await removeTag(detailsTarget.id, detailsTarget.category, tag);
+      // Remove deleted
+      for (const t of oldTags.filter((x) => !currentTags.includes(x))) {
+        await removeTag(detailsTarget.id, detailsTarget.category, t);
       }
 
       setDetailsModalOpen(false);
+      setCurrentTags([]);
       setBrandText("");
       setPriceText("");
       setTagText("");
-      setCurrentTags([]);
       setDetailsTarget(null);
-    } catch (error) {
-      console.error("Error updating details:", error);
+    } catch (e) {
       Alert.alert("Error", "Failed to update item details.");
     }
   };
 
+  // -------------------------
+  // PICK IMAGE
+  // -------------------------
   const pickImage = async (category: string, fromCamera: boolean) => {
     try {
       if (Platform.OS !== "web") {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (status !== "granted") {
-          Alert.alert("Permission Required", "Please grant media library permissions");
+          Alert.alert("Permission Required", "Need media library permissions.");
           return;
         }
       }
 
       let result;
       if (fromCamera) {
-        if (Platform.OS !== "web") {
-          const { status } = await ImagePicker.requestCameraPermissionsAsync();
-          if (status !== "granted") {
-            Alert.alert("Permission Required", "Please grant camera permissions");
-            return;
-          }
-        }
+        const camPerm = await ImagePicker.requestCameraPermissionsAsync();
+        if (camPerm.status !== "granted") return;
+
         result = await ImagePicker.launchCameraAsync({
           mediaTypes: "images",
           allowsEditing: true,
           quality: 0.8,
-          exif: false,
         });
       } else {
         result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: "images",
           allowsEditing: true,
           quality: 0.8,
-          exif: false,
         });
       }
 
       if (!result.canceled && result.assets.length > 0) {
         setUploading(true);
-        
-        try {
-          console.log("Selected image URI:", result.assets[0].uri);
-          
-          const downloadURL = await uploadImageToStorage(
-            result.assets[0].uri,
-            category
-          );
 
-          console.log("Got download URL:", downloadURL);
+        const downloadURL = await uploadImageToStorage(result.assets[0].uri, category);
 
-          await addItem({
-            uri: downloadURL,
-            category,
-            tags: [],
-          });
+        await addItem({
+          uri: downloadURL,
+          category,
+          tags: [],
+        });
 
-          Alert.alert("Success", "Item added to your closet!");
-        } catch (error: any) {
-          console.error("Error uploading:", error);
-          Alert.alert("Error", error.message || "Failed to upload image. Please try again.");
-        } finally {
-          setUploading(false);
-        }
+        Alert.alert("Success", "Item added!");
       }
     } catch (err: any) {
-      console.error("Error picking image:", err);
-      Alert.alert("Error", "Failed to pick image. Please try again.");
+      Alert.alert("Error", err.message);
+    } finally {
       setUploading(false);
     }
   };
 
-  const handleRemoveItem = async (itemId: string, category: string) => {
-    Alert.alert(
-      "Confirm Delete",
-      "Are you sure you want to remove this item?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            setDeleting(true);
-            try {
-              await removeItem(itemId, category);
-              Alert.alert("Success", "Item deleted.");
-            } catch (error: any) {
-              console.error("Error deleting item:", error);
-              Alert.alert("Error", "Failed to delete item. Please try again.");
-            } finally {
-              setDeleting(false);
-            }
-          },
+  // -------------------------
+  // DELETE ITEM
+  // -------------------------
+  const handleRemoveItem = (itemId: string, category: string) => {
+    Alert.alert("Confirm", "Delete this item?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          setDeleting(true);
+          await removeItem(itemId, category);
+          setDeleting(false);
         },
-      ]
-    );
+      },
+    ]);
   };
 
-  const showImageMenu = (itemId: string, category: string) => {
+  // -------------------------
+  // STORAGE LOGIC
+  // -------------------------
+  const showImageMenu = (id: string, cat: string) => {
     Alert.alert("Options", "Choose an action", [
       {
         text: "Add to Storage",
         onPress: () => {
-          setSelectedItemForStorage(itemId);
-          setSelectedCategoryForStorage(category);
+          setSelectedItemForStorage(id);
+          setSelectedCategoryForStorage(cat);
           setItemModalOpen(true);
         },
       },
       {
         text: "Remove Item",
-        onPress: () => handleRemoveItem(itemId, category),
         style: "destructive",
+        onPress: () => handleRemoveItem(id, cat),
       },
       { text: "Cancel", style: "cancel" },
     ]);
   };
 
-  const handleAddStorage = () => {
-    if (storageName.trim()) {
-      addStorage(storageName.trim());
-      setStorageName("");
-      setStorageModalOpen(false);
-    }
-  };
+  const getItemFromCloset = (id: string, cat: string) =>
+    closet[cat]?.find((i) => i.id === id);
 
-  const handleAddItemToStorage = async (storageId: string, itemId: string, category: string) => {
-    try {
-      await addItemToStorage(storageId, itemId, category);
-      
-      // The storages state will update via the useEffect
-      setItemModalOpen(false);
-      setSelectedItemForStorage(null);
-      setSelectedCategoryForStorage("");
-      Alert.alert("Success", "Item added to storage!");
-    } catch (error) {
-      console.error("Error adding item to storage:", error);
-      Alert.alert("Error", "Failed to add item to storage.");
-    }
-  };
-
-  const handleStorageLongPress = (storage: any) => {
-    setEditingStorageId(storage.id);
-    setEditStorageName(storage.name);
-    setStorageActionModal(true);
-  };
-
-  const handleRenameStorage = () => {
-    if (editStorageName.trim() && editingStorageId) {
-      renameStorage(editingStorageId, editStorageName.trim());
-      setStorageActionModal(false);
-      setEditingStorageId(null);
-      setEditStorageName("");
-    }
-  };
-
-  const handleDeleteStorage = () => {
-    if (storages.length === 1) {
-      Alert.alert("Cannot Delete", "You must have at least one storage.");
-      return;
-    }
-    
-    if (editingStorageId) {
-      const storageToDelete = storages.find(s => s.id === editingStorageId);
-      const itemCount = storageToDelete?.items.length || 0;
-      
-      Alert.alert(
-        "Confirm Delete",
-        itemCount > 0 
-          ? `Delete this storage and all ${itemCount} items inside?`
-          : "Delete this storage?",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Delete",
-            style: "destructive",
-            onPress: async () => {
-              setDeleting(true);
-              setStorageActionModal(false);
-              try {
-                await deleteStorage(editingStorageId);
-                Alert.alert("Success", "Storage deleted.");
-              } catch (error) {
-                console.error("Error deleting storage:", error);
-                Alert.alert("Error", "Failed to delete storage. Please try again.");
-              } finally {
-                setDeleting(false);
-                setEditingStorageId(null);
-                setEditStorageName("");
-              }
-            },
-          },
-        ]
-      );
-    }
-  };
-
-  const getItemFromCloset = (itemId: string, category: string) => {
-    return closet[category]?.find((item) => item.id === itemId);
-  };
-
+  // -------------------------
+  // RENDER UI
+  // -------------------------
   return (
     <View style={styles.container}>
       {(uploading || deleting) && (
         <View style={styles.uploadingOverlay}>
           <View style={styles.uploadingCard}>
             <ActivityIndicator size="large" color="#0066ff" />
-            <Text style={styles.uploadingText}>
-              {uploading ? "Uploading..." : "Deleting..."}
-            </Text>
+            <Text style={styles.uploadingText}>{uploading ? "Uploading..." : "Deleting..."}</Text>
           </View>
         </View>
       )}
 
-      <ScrollView 
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-      >
-        {/* TOP HALF - ITEMS BY CATEGORY */}
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        {/* ITEMS */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>My Items</Text>
 
@@ -379,32 +279,23 @@ const ClosetScreen = () => {
             <View key={category} style={styles.categoryContainer}>
               <View style={styles.categoryHeader}>
                 <Text style={styles.categoryTitle}>{category}</Text>
-                <Text style={styles.itemCount}>
-                  {closet[category]?.length || 0}
-                </Text>
+                <Text style={styles.itemCount}>{closet[category]?.length || 0}</Text>
               </View>
 
               <View style={styles.buttonRow}>
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.flex1]}
-                  onPress={() => pickImage(category, true)}
-                  disabled={uploading || deleting}
-                >
+                <TouchableOpacity onPress={() => pickImage(category, true)} style={[styles.actionButton, styles.flex1]}>
                   <Text style={styles.buttonText}>Take Picture</Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.flex1]}
-                  onPress={() => pickImage(category, false)}
-                  disabled={uploading || deleting}
-                >
-                  <Text style={styles.buttonText}>Add from Gallery</Text>
+
+                <TouchableOpacity onPress={() => pickImage(category, false)} style={[styles.actionButton, styles.flex1]}>
+                  <Text style={styles.buttonText}>From Gallery</Text>
                 </TouchableOpacity>
               </View>
 
               <FlatList
-                data={closet[category] || []}
-                keyExtractor={(item) => item.id}
+                data={closet[category]}
                 horizontal
+                keyExtractor={(item) => item.id}
                 showsHorizontalScrollIndicator={false}
                 renderItem={({ item }) => (
                   <View style={styles.itemCard}>
@@ -413,122 +304,85 @@ const ClosetScreen = () => {
                       onLongPress={() => showImageMenu(item.id, category)}
                       style={styles.imageWrapper}
                     >
-                      <Image 
-                        source={{ uri: item.uri }} 
-                        style={styles.image}
-                        contentFit = "contain"
-                        cachePolicy = "disk"
-                        onLoad={() => console.log("Expo image loaded", item.uri)}
-                        onError={(e) => console.log("expo-image error", item.uri, e)}
-                      />
+                      <Image source={{ uri: item.uri }} style={styles.image} contentFit="contain" />
+
                       {(item.brand || item.price) && (
                         <View style={styles.itemBadge}>
-                          {item.brand && (
-                            <Text style={styles.badgeText}>{item.brand}</Text>
-                          )}
-                          {item.price && (
-                            <Text style={styles.badgePrice}>${item.price}</Text>
-                          )}
+                          {item.brand && <Text style={styles.badgeText}>{item.brand}</Text>}
+                          {item.price && <Text style={styles.badgePrice}>${item.price}</Text>}
                         </View>
                       )}
                     </TouchableOpacity>
-                    <TagChips
-                      tags={item.tags}
-                      onRemove={(t) => removeTag(item.id, category, t)}
-                    />
+
+                    <TagChips tags={item.tags} onRemove={(t) => removeTag(item.id, category, t)} />
                   </View>
                 )}
-                ListEmptyComponent={
-                  <View style={styles.emptyState}>
-                    <Text style={styles.emptyText}>No items yet</Text>
-                  </View>
-                }
               />
             </View>
           ))}
         </View>
 
-        {/* BOTTOM HALF - STORAGE MANAGEMENT */}
         <View style={styles.divider} />
 
+        {/* STORAGE */}
         <View style={styles.section}>
           <View style={styles.storageHeader}>
             <Text style={styles.sectionTitle}>Storage</Text>
-            <TouchableOpacity
-              style={styles.addButton}
-              onPress={() => setStorageModalOpen(true)}
-            >
+
+            <TouchableOpacity style={styles.addButton} onPress={() => setStorageModalOpen(true)}>
               <Text style={styles.addButtonText}>+ Add</Text>
             </TouchableOpacity>
           </View>
 
-          {storages.length > 1 && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.storageScrollView}
-            >
-              {storages.map((storage) => (
-                <Pressable
-                  key={storage.id}
-                  onPress={() => setSelectedStorage(storage)}
-                  onLongPress={() => handleStorageLongPress(storage)}
-                  style={[
-                    styles.storageCard,
-                    selectedStorage?.id === storage.id && styles.storageCardActive,
-                  ]}
-                >
-                  <Text style={styles.storageCardName}>{storage.name}</Text>
-                  <Text style={styles.storageCardCount}>{storage.items.length} items</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-          )}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.storageScrollView}>
+            {storages.map((storage) => (
+              <Pressable
+                key={storage.id}
+                onPress={() => setSelectedStorage(storage)}
+                onLongPress={() => {
+                  setEditingStorageId(storage.id);
+                  setEditStorageName(storage.name);
+                  setStorageActionModal(true);
+                }}
+                style={[
+                  styles.storageCard,
+                  selectedStorage?.id === storage.id && styles.storageCardActive,
+                ]}
+              >
+                <Text style={styles.storageCardName}>{storage.name}</Text>
+                <Text style={styles.storageCardCount}>{storage.items.length} items</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
 
+          {/* Storage grid */}
           {selectedStorage && (
             <View style={styles.storageContent}>
               <View style={styles.storageContentHeader}>
-                <View>
-                  <Text style={styles.storageContentTitle}>
-                    {selectedStorage.name}
-                  </Text>
-                  <Text style={styles.storageContentSubtitle}>
-                    {selectedStorage.items.length} items stored
-                  </Text>
-                </View>
+                <Text style={styles.storageContentTitle}>{selectedStorage.name}</Text>
+                <Text style={styles.storageContentSubtitle}>
+                  {selectedStorage.items.length} items stored
+                </Text>
               </View>
 
               {selectedStorage.items.length > 0 ? (
                 <View style={styles.storedItemsGrid}>
-                  {selectedStorage.items.map((storedItem, index) => {
-                    const item = getItemFromCloset(
-                      storedItem.itemId,
-                      storedItem.category
-                    );
+                  {selectedStorage.items.map((entry, i) => {
+                    const item = getItemFromCloset(entry.itemId, entry.category);
                     if (!item) return null;
 
                     return (
-                      <View key={index} style={styles.storedItemCard}>
-                        <Image source={{ uri: item.uri }} 
-                        style={styles.storedImage}
-                        contentFit="cover"
-                        cachePolicy="disk"
-                         />
+                      <View key={i} style={styles.storedItemCard}>
+                        <Image source={{ uri: item.uri }} style={styles.storedImage} contentFit="cover" />
+
                         <View style={styles.storedItemInfo}>
-                          <Text style={styles.storedItemCategory}>
-                            {storedItem.category}
-                          </Text>
-                          {item.brand && (
-                            <Text style={styles.storedItemBrand}>{item.brand}</Text>
-                          )}
-                          {item.price && (
-                            <Text style={styles.storedItemPrice}>${item.price}</Text>
-                          )}
+                          <Text style={styles.storedItemCategory}>{entry.category}</Text>
+                          {item.brand && <Text style={styles.storedItemBrand}>{item.brand}</Text>}
+                          {item.price && <Text style={styles.storedItemPrice}>${item.price}</Text>}
+
                           <TouchableOpacity
-                            onPress={() =>
-                              removeItemFromStorage(selectedStorage.id, storedItem.itemId)
-                            }
                             style={styles.removeButton}
+                            onPress={() => removeItemFromStorage(selectedStorage.id, entry.itemId)}
                           >
                             <Text style={styles.removeButtonText}>Remove</Text>
                           </TouchableOpacity>
@@ -540,9 +394,7 @@ const ClosetScreen = () => {
               ) : (
                 <View style={styles.emptyStorageState}>
                   <Text style={styles.emptyStorageText}>Empty storage</Text>
-                  <Text style={styles.emptyStorageSubtext}>
-                    Add items from above to organize them here
-                  </Text>
+                  <Text style={styles.emptyStorageSubtext}>Add items above</Text>
                 </View>
               )}
             </View>
@@ -550,44 +402,45 @@ const ClosetScreen = () => {
         </View>
       </ScrollView>
 
-      {/* Combined Details Modal (Tags, Brand, Price) */}
-      <Modal
-        transparent
-        visible={detailsModalOpen}
-        animationType="fade"
-        onRequestClose={() => setDetailsModalOpen(false)}
-      >
+      {/* ---------------- MODALS ---------------- */}
+
+      {/* DETAILS MODAL */}
+      <Modal transparent visible={detailsModalOpen} animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.detailsModalCard}>
             <Text style={styles.modalTitle}>Item Details</Text>
-            
-            {/* Tags Section */}
+
             <View style={styles.detailSection}>
               <Text style={styles.detailLabel}>Tags</Text>
+
               <View style={styles.tagInputRow}>
                 <TextInput
                   value={tagText}
                   onChangeText={setTagText}
-                  placeholder="Add tag (e.g., casual, summer)"
+                  placeholder="New tag"
                   style={styles.tagInput}
                   onSubmitEditing={addTagToList}
                 />
-                <TouchableOpacity 
-                  style={styles.addTagButton}
-                  onPress={addTagToList}
-                >
+                <TouchableOpacity style={styles.addTagButton} onPress={addTagToList}>
                   <Text style={styles.addTagButtonText}>Add</Text>
                 </TouchableOpacity>
               </View>
+
+              {tagSuggestions.length > 0 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.suggestRow}>
+                  {tagSuggestions.map((t) => (
+                    <Pressable key={t} style={styles.suggestChip} onPress={() => handleQuickAddTag(t)}>
+                      <Text style={styles.suggestChipText}>{t}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              )}
+
               <View style={styles.tagsRow}>
-                {currentTags.map((tag) => (
-                  <Pressable 
-                    key={tag} 
-                    onPress={() => removeTagFromList(tag)}
-                    style={styles.modalChip}
-                  >
-                    <Text style={styles.modalChipText}>#{tag}</Text>
-                    <Text style={styles.removeChipIcon}> ✕</Text>
+                {currentTags.map((t) => (
+                  <Pressable key={t} onPress={() => removeTagFromList(t)} style={styles.modalChip}>
+                    <Text style={styles.modalChipText}>#{t}</Text>
+                    <Text style={styles.removeChipIcon}>✕</Text>
                   </Pressable>
                 ))}
               </View>
@@ -595,76 +448,68 @@ const ClosetScreen = () => {
 
             <View style={styles.detailsDivider} />
 
-            {/* Brand Section */}
             <View style={styles.detailSection}>
               <Text style={styles.detailLabel}>Brand</Text>
               <TextInput
                 value={brandText}
                 onChangeText={setBrandText}
-                placeholder="e.g., Nike, Zara, H&M"
+                placeholder="Nike, Zara..."
                 style={styles.input}
               />
             </View>
 
-            {/* Price Section */}
             <View style={styles.detailSection}>
               <Text style={styles.detailLabel}>Price</Text>
               <TextInput
                 value={priceText}
                 onChangeText={setPriceText}
-                placeholder="e.g., 49.99"
-                keyboardType="decimal-pad"
+                placeholder="e.g., 45.99"
                 style={styles.input}
+                keyboardType="decimal-pad"
               />
             </View>
-            
+
             <View style={styles.modalButtons}>
-              <Pressable
-                onPress={() => {
-                  setDetailsModalOpen(false);
-                  setBrandText("");
-                  setPriceText("");
-                  setTagText("");
-                  setCurrentTags([]);
-                }}
-                style={styles.modalCancelBtn}
-              >
+              <Pressable style={styles.modalCancelBtn} onPress={() => setDetailsModalOpen(false)}>
                 <Text style={styles.modalBtnText}>Cancel</Text>
               </Pressable>
-              <Pressable onPress={submitDetails} style={styles.modalSubmitBtn}>
-                <Text style={styles.modalBtnTextPrimary}>Save All</Text>
+
+              <Pressable style={styles.modalSubmitBtn} onPress={submitDetails}>
+                <Text style={styles.modalBtnTextPrimary}>Save</Text>
               </Pressable>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Storage Modal */}
-      <Modal
-        transparent
-        visible={storageModalOpen}
-        animationType="fade"
-        onRequestClose={() => setStorageModalOpen(false)}
-      >
+      {/* STORAGE CREATE MODAL */}
+      <Modal transparent visible={storageModalOpen} animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>New Storage</Text>
+
             <TextInput
               value={storageName}
               onChangeText={setStorageName}
-              placeholder="e.g., My grey bin, Drawer 2"
-              autoFocus
+              placeholder="My Drawer"
               style={styles.input}
-              onSubmitEditing={handleAddStorage}
             />
+
             <View style={styles.modalButtons}>
-              <Pressable
-                onPress={() => setStorageModalOpen(false)}
-                style={styles.modalCancelBtn}
-              >
+              <Pressable style={styles.modalCancelBtn} onPress={() => setStorageModalOpen(false)}>
                 <Text style={styles.modalBtnText}>Cancel</Text>
               </Pressable>
-              <Pressable onPress={handleAddStorage} style={styles.modalSubmitBtn}>
+
+              <Pressable
+                style={styles.modalSubmitBtn}
+                onPress={() => {
+                  if (storageName.trim()) {
+                    addStorage(storageName.trim());
+                    setStorageName("");
+                    setStorageModalOpen(false);
+                  }
+                }}
+              >
                 <Text style={styles.modalBtnTextPrimary}>Create</Text>
               </Pressable>
             </View>
@@ -672,83 +517,70 @@ const ClosetScreen = () => {
         </View>
       </Modal>
 
-      {/* Item to Storage Modal */}
-      <Modal
-        transparent
-        visible={itemModalOpen}
-        animationType="fade"
-        onRequestClose={() => setItemModalOpen(false)}
-      >
+      {/* ITEM → STORAGE MODAL */}
+      <Modal transparent visible={itemModalOpen} animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Select Storage</Text>
-            <Text style={styles.modalSubtitle}>
-              Choose where to store this item
-            </Text>
+
             <View style={styles.storageOptions}>
-              {storages.map((storage) => (
+              {storages.map((s) => (
                 <TouchableOpacity
-                  key={storage.id}
+                  key={s.id}
                   style={styles.storageOption}
-                  onPress={() =>
-                    handleAddItemToStorage(
-                      storage.id,
-                      selectedItemForStorage!,
-                      selectedCategoryForStorage
-                    )
-                  }
+                  onPress={() => {
+                    addItemToStorage(s.id, selectedItemForStorage!, selectedCategoryForStorage);
+                    setItemModalOpen(false);
+                  }}
                 >
-                  <Text style={styles.storageOptionName}>{storage.name}</Text>
-                  <Text style={styles.storageOptionCount}>
-                    {storage.items.length} items
-                  </Text>
+                  <Text style={styles.storageOptionName}>{s.name}</Text>
+                  <Text style={styles.storageOptionCount}>{s.items.length} items</Text>
                 </TouchableOpacity>
               ))}
             </View>
-            <Pressable
-              onPress={() => setItemModalOpen(false)}
-              style={styles.modalCancelBtn}
-            >
+
+            <Pressable style={styles.modalCancelBtn} onPress={() => setItemModalOpen(false)}>
               <Text style={styles.modalBtnText}>Cancel</Text>
             </Pressable>
           </View>
         </View>
       </Modal>
 
-      {/* Storage Action Modal */}
-      <Modal
-        transparent
-        visible={storageActionModal}
-        animationType="fade"
-        onRequestClose={() => setStorageActionModal(false)}
-      >
+      {/* STORAGE EDIT / DELETE MODAL */}
+      <Modal transparent visible={storageActionModal} animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Storage Options</Text>
+
             <TextInput
               value={editStorageName}
               onChangeText={setEditStorageName}
-              placeholder="Storage name"
               style={styles.input}
             />
+
             <View style={styles.modalButtons}>
               <TouchableOpacity
-                onPress={handleRenameStorage}
                 style={styles.modalSubmitBtn}
+                onPress={() => {
+                  renameStorage(editingStorageId!, editStorageName.trim());
+                  setStorageActionModal(false);
+                }}
               >
                 <Text style={styles.modalBtnTextPrimary}>Rename</Text>
               </TouchableOpacity>
+
               <TouchableOpacity
-                onPress={handleDeleteStorage}
                 style={styles.modalDeleteBtn}
+                onPress={() => {
+                  deleteStorage(editingStorageId!);
+                  setStorageActionModal(false);
+                }}
               >
                 <Text style={styles.modalBtnTextDelete}>Delete</Text>
               </TouchableOpacity>
             </View>
-            <Pressable
-              onPress={() => setStorageActionModal(false)}
-              style={styles.modalCancelBtn}
-            >
+
+            <Pressable style={styles.modalCancelBtn} onPress={() => setStorageActionModal(false)}>
               <Text style={styles.modalBtnText}>Close</Text>
             </Pressable>
           </View>
@@ -758,7 +590,34 @@ const ClosetScreen = () => {
   );
 };
 
+// -------------------------
+// STYLES
+// -------------------------
 const styles = StyleSheet.create({
+  quickTagLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#888",
+    marginBottom: 4,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  quickTagsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  quickTagChip: {
+    backgroundColor: "#f0f2ff",
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+  },
+  quickTagChipText: {
+    fontSize: 11,
+    color: "#1a4fff",
+    fontWeight: "600",
+  },
   container: {
     flex: 1,
     backgroundColor: "#f5f7fa",
@@ -798,7 +657,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#1a1a1a",
     marginBottom: 14,
-    letterSpacing: 0.5,
   },
   categoryContainer: {
     marginBottom: 16,
@@ -807,11 +665,6 @@ const styles = StyleSheet.create({
     padding: 12,
     borderWidth: 1,
     borderColor: "#f0f0f0",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
   },
   categoryHeader: {
     flexDirection: "row",
@@ -847,11 +700,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 10,
     alignItems: "center",
-    shadowColor: "#0066ff",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 4,
   },
   buttonText: {
     color: "#fff",
@@ -890,9 +738,9 @@ const styles = StyleSheet.create({
   },
   badgePrice: {
     fontSize: 10,
-    fontWeight: "600",
     color: "#4ade80",
     textAlign: "center",
+    fontWeight: "600",
   },
   tagsRow: {
     flexDirection: "row",
@@ -905,7 +753,6 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 14,
-    marginBottom: 2,
   },
   chipText: {
     fontSize: 11,
@@ -914,13 +761,11 @@ const styles = StyleSheet.create({
   },
   emptyState: {
     paddingVertical: 24,
-    justifyContent: "center",
     alignItems: "center",
   },
   emptyText: {
     fontSize: 14,
     color: "#999",
-    fontWeight: "500",
   },
   divider: {
     height: 1,
@@ -931,18 +776,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 14,
   },
   addButton: {
     backgroundColor: "#10b981",
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: 10,
-    shadowColor: "#10b981",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 4,
   },
   addButtonText: {
     color: "#fff",
@@ -961,31 +800,19 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: "#f0f0f0",
     minWidth: 125,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
   },
   storageCardActive: {
     borderColor: "#0066ff",
     backgroundColor: "#f0f7ff",
-    shadowColor: "#0066ff",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 4,
   },
   storageCardName: {
     fontSize: 14,
     fontWeight: "700",
     color: "#1a1a1a",
-    marginBottom: 4,
   },
   storageCardCount: {
     fontSize: 12,
     color: "#999",
-    fontWeight: "500",
   },
   storageContent: {
     backgroundColor: "#fff",
@@ -993,29 +820,17 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: "#f0f0f0",
-    marginTop: 10,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
   },
   storageContentHeader: {
     marginBottom: 14,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f5f7fa",
   },
   storageContentTitle: {
     fontSize: 17,
     fontWeight: "800",
-    color: "#1a1a1a",
   },
   storageContentSubtitle: {
     fontSize: 13,
     color: "#999",
-    marginTop: 3,
-    fontWeight: "500",
   },
   storedItemsGrid: {
     flexDirection: "row",
@@ -1026,7 +841,6 @@ const styles = StyleSheet.create({
     width: "31%",
     backgroundColor: "#f8fafc",
     borderRadius: 12,
-    overflow: "hidden",
     borderWidth: 1,
     borderColor: "#f0f0f0",
   },
@@ -1042,24 +856,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     color: "#0066ff",
-    marginBottom: 4,
   },
   storedItemBrand: {
     fontSize: 11,
-    fontWeight: "600",
     color: "#666",
-    marginBottom: 2,
+    fontWeight: "600",
   },
   storedItemPrice: {
     fontSize: 11,
     fontWeight: "700",
     color: "#10b981",
-    marginBottom: 4,
   },
   removeButton: {
     backgroundColor: "#ffe6e6",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    padding: 6,
     borderRadius: 6,
     alignItems: "center",
     marginTop: 4,
@@ -1067,23 +877,18 @@ const styles = StyleSheet.create({
   removeButtonText: {
     fontSize: 12,
     color: "#d32f2f",
-    fontWeight: "700",
   },
   emptyStorageState: {
     paddingVertical: 32,
-    justifyContent: "center",
     alignItems: "center",
   },
   emptyStorageText: {
     fontSize: 16,
-    fontWeight: "700",
     color: "#999",
-    marginBottom: 5,
   },
   emptyStorageSubtext: {
     fontSize: 13,
     color: "#bbb",
-    fontWeight: "500",
   },
   modalBackdrop: {
     flex: 1,
@@ -1097,11 +902,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 20,
     gap: 14,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 10,
   },
   detailsModalCard: {
     width: "90%",
@@ -1109,16 +909,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderRadius: 16,
     padding: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 10,
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: "800",
-    color: "#1a1a1a",
     marginBottom: 16,
   },
   detailSection: {
@@ -1127,10 +921,7 @@ const styles = StyleSheet.create({
   detailLabel: {
     fontSize: 14,
     fontWeight: "700",
-    color: "#666",
     marginBottom: 8,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
   },
   tagInputRow: {
     flexDirection: "row",
@@ -1143,21 +934,37 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    fontSize: 15,
-    color: "#1a1a1a",
-    fontWeight: "500",
   },
   addTagButton: {
     backgroundColor: "#0066ff",
     paddingHorizontal: 20,
     borderRadius: 10,
     justifyContent: "center",
-    alignItems: "center",
   },
   addTagButtonText: {
     color: "#fff",
-    fontSize: 14,
     fontWeight: "700",
+  },
+  suggestRow: {
+    marginTop: 6,
+    marginBottom: 4,
+  },
+   storageOptions: {
+    marginVertical: 14,
+    gap: 10,
+  },
+  suggestChip: {
+    backgroundColor: "#f0f7ff",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#0066ff",
+    marginRight: 6,
+  },
+  suggestChipText: {
+    fontSize: 12,
+    color: "#0066ff",
   },
   modalChip: {
     backgroundColor: "#0066ff",
@@ -1171,12 +978,10 @@ const styles = StyleSheet.create({
   modalChipText: {
     fontSize: 12,
     color: "#fff",
-    fontWeight: "600",
   },
   removeChipIcon: {
     fontSize: 14,
     color: "#fff",
-    fontWeight: "700",
     marginLeft: 4,
   },
   detailsDivider: {
@@ -1187,8 +992,6 @@ const styles = StyleSheet.create({
   modalSubtitle: {
     fontSize: 14,
     color: "#666",
-    marginBottom: 10,
-    fontWeight: "500",
   },
   input: {
     borderWidth: 1.5,
@@ -1196,9 +999,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    fontSize: 15,
-    color: "#1a1a1a",
-    fontWeight: "500",
   },
   modalButtons: {
     flexDirection: "row",
@@ -1211,8 +1011,6 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#e8ecf1",
   },
   modalSubmitBtn: {
     flex: 1,
@@ -1220,11 +1018,6 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: "center",
-    shadowColor: "#0066ff",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 4,
   },
   modalDeleteBtn: {
     flex: 1,
@@ -1232,16 +1025,10 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: "center",
-    shadowColor: "#ff4757",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 4,
   },
   modalBtnText: {
     fontSize: 15,
     fontWeight: "700",
-    color: "#666",
   },
   modalBtnTextPrimary: {
     fontSize: 15,
@@ -1253,28 +1040,20 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#fff",
   },
-  storageOptions: {
-    marginVertical: 14,
-    gap: 10,
-  },
   storageOption: {
     backgroundColor: "#f8fafc",
     paddingVertical: 13,
     paddingHorizontal: 14,
     borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#e8ecf1",
+    marginBottom: 8,
   },
   storageOptionName: {
     fontSize: 15,
     fontWeight: "700",
-    color: "#1a1a1a",
-    marginBottom: 3,
   },
   storageOptionCount: {
     fontSize: 12,
     color: "#999",
-    fontWeight: "500",
   },
 });
 

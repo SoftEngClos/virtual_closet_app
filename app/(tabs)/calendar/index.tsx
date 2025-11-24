@@ -139,7 +139,15 @@ const handleQuickOptionPress = (opt: QuickOption) => {
   setPendingRecommendedOutfit(primary);
 
   // 6) Navigate to wherever you show the generated outfit
-  router.push("/add-item");
+// BEFORE
+// router.push("/recommendation-preview");
+
+// AFTER
+router.push({
+  pathname: "/recommendation-preview",
+  params: { date: selectedDate },
+});
+
 };
 
  
