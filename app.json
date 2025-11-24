@@ -58,6 +58,7 @@
       "favicon": "./assets/favicon.png"
     },
     "extra": {
+      "RAPID_API_KEY": "bfb1266c79msh8013085b350dc43p1c841ajsn8b7ba9e28e5a",
       "react-native-safe-module": {
         "platform": {
           "auth": {

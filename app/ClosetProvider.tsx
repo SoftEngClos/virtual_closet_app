@@ -17,7 +17,6 @@ import { onAuthStateChanged, User } from "firebase/auth";
 
 import * as ImageManipulator from "expo-image-manipulator";
 
-
 type ClosetItem = {
   id: string;
   uri: string;
@@ -44,17 +43,19 @@ type Storage = {
 type ClosetContextType = {
   closet: Record<string, ClosetItem[]>;
   storages: Storage[];
+  globalTags: string[];
   addItem: (item: Omit<ClosetItem, "id">) => Promise<void>;
   removeItem: (id: string, category: string) => Promise<void>;
   addTag: (id: string, category: string, tag: string) => Promise<void>;
   removeTag: (id: string, category: string, tag: string) => Promise<void>;
-  updateItemDetails: (id: string, category: string, details: { brand?: string; price?: number }) => Promise<void>;
+  updateItemDetails: (id: string, category: string, brand?: string, price?: number) => Promise<void>;
   uploadImageToStorage: (uri: string, category: string) => Promise<string>;
   addStorage: (name: string) => Promise<void>;
   deleteStorage: (storageId: string) => Promise<void>;
   renameStorage: (storageId: string, newName: string) => Promise<void>;
   addItemToStorage: (storageId: string, itemId: string, category: string) => Promise<void>;
   removeItemFromStorage: (storageId: string, itemId: string) => Promise<void>;
+  addGlobalTag: (tag: string) => Promise<void>;
 };
 
 const ClosetContext = createContext<ClosetContextType | undefined>(undefined);
@@ -70,6 +71,7 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
   });
 
   const [storages, setStorages] = useState<Storage[]>([]);
+  const [globalTags, setGlobalTags] = useState<string[]>([]);
   const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
@@ -78,6 +80,7 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
         setUser(firebaseUser);
         await loadUserCloset(firebaseUser.uid);
         await loadUserStorages(firebaseUser.uid);
+        await loadGlobalTags(firebaseUser.uid);
       } else {
         setUser(null);
         setCloset({
@@ -87,6 +90,7 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
           Accessories: [],
         });
         setStorages([]);
+        setGlobalTags([]);
       }
     });
 
@@ -150,6 +154,48 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  const loadGlobalTags = async (userId: string) => {
+    try {
+      const docRef = doc(db, "userTags", userId);
+      const docSnap = await getDoc(docRef);
+
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setGlobalTags(data.tags || []);
+      } else {
+        setGlobalTags([]);
+      }
+    } catch (error) {
+      console.error("Error loading global tags:", error);
+    }
+  };
+
+  const saveGlobalTags = async (tags: string[]) => {
+    if (!user) return;
+
+    try {
+      const docRef = doc(db, "userTags", user.uid);
+      await setDoc(docRef, { tags });
+      setGlobalTags(tags);
+    } catch (error) {
+      console.error("Error saving global tags:", error);
+      throw error;
+    }
+  };
+
+  const addGlobalTag = async (tag: string) => {
+    if (!user) return;
+    if (globalTags.includes(tag)) return;
+
+    try {
+      const updatedTags = [...globalTags, tag];
+      await saveGlobalTags(updatedTags);
+    } catch (error) {
+      console.error("Error adding global tag:", error);
+      throw error;
+    }
+  };
+
   const saveStorages = async (newStorages: Storage[]) => {
     if (!user) return;
 
@@ -183,76 +229,68 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const uploadImageToStorage = async (
-     uri: string,
-  category: string
-): Promise<string> => {
-  if (!user) throw new Error("User not authenticated");
+    uri: string,
+    category: string
+  ): Promise<string> => {
+    if (!user) throw new Error("User not authenticated");
 
-  const lower = uri.toLowerCase();
-  // default to png for our cropped output; switch to jpg if the URI clearly says so
-  let intendedExt: "png" | "jpg" =
-    lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? "jpg" : "png";
+    const lower = uri.toLowerCase();
+    let intendedExt: "png" | "jpg" =
+      lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? "jpg" : "png";
 
-  // 1) Read the URI into a Blob
-  let res = await fetch(uri);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch image: ${res.status} ${res.statusText}`);
-  }
-  let blob = await res.blob();
-  if (!blob || blob.size === 0) throw new Error("Invalid image blob - size is 0");
+    let res = await fetch(uri);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch image: ${res.status} ${res.statusText}`);
+    }
+    let blob = await res.blob();
+    if (!blob || blob.size === 0) throw new Error("Invalid image blob - size is 0");
 
-  // 2) If blob.type is missing or not image/*, re-encode to PNG
-  let typeOk = !!blob.type && blob.type.startsWith("image/");
-  if (!typeOk) {
-    const encoded = await ImageManipulator.manipulateAsync(
-      uri,
-      [], // no ops, just re-encode
-      { compress: 1, format: ImageManipulator.SaveFormat.PNG }
-    );
-    res = await fetch(encoded.uri);
-    blob = await res.blob();
-    intendedExt = "png";
-  }
+    let typeOk = !!blob.type && blob.type.startsWith("image/");
+    if (!typeOk) {
+      const encoded = await ImageManipulator.manipulateAsync(
+        uri,
+        [],
+        { compress: 1, format: ImageManipulator.SaveFormat.PNG }
+      );
+      res = await fetch(encoded.uri);
+      blob = await res.blob();
+      intendedExt = "png";
+    }
 
-  // 3) Handle HEIC (convert to JPEG)
-  let contentType =
-    blob.type && blob.type.startsWith("image/") ? blob.type : undefined;
+    let contentType =
+      blob.type && blob.type.startsWith("image/") ? blob.type : undefined;
 
-  if (contentType?.includes("heic")) {
-    const jpeg = await ImageManipulator.manipulateAsync(
-      uri,
-      [],
-      { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
-    );
-    res = await fetch(jpeg.uri);
-    blob = await res.blob();
-    contentType = "image/jpeg";
-    intendedExt = "jpg";
-  }
+    if (contentType?.includes("heic")) {
+      const jpeg = await ImageManipulator.manipulateAsync(
+        uri,
+        [],
+        { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      res = await fetch(jpeg.uri);
+      blob = await res.blob();
+      contentType = "image/jpeg";
+      intendedExt = "jpg";
+    }
 
-  // 4) Finalize contentType if still unknown
-  if (!contentType) {
-    contentType = intendedExt === "png" ? "image/png" : "image/jpeg";
-  }
+    if (!contentType) {
+      contentType = intendedExt === "png" ? "image/png" : "image/jpeg";
+    }
 
-  // 5) Build a filename that matches the real bytes
-  const filename = `${Date.now()}_${category}.${intendedExt}`;
-  const storagePath = `users/${user.uid}/closet/${category}/${filename}`;
-  const sref = ref(storage, storagePath);
+    const filename = `${Date.now()}_${category}.${intendedExt}`;
+    const storagePath = `users/${user.uid}/closet/${category}/${filename}`;
+    const sref = ref(storage, storagePath);
 
-  // 6) Upload with correct metadata
-  await uploadBytes(sref, blob, {
-    contentType,
-    customMetadata: {
-      uploadedAt: new Date().toISOString(),
-      category,
-    },
-  });
+    await uploadBytes(sref, blob, {
+      contentType,
+      customMetadata: {
+        uploadedAt: new Date().toISOString(),
+        category,
+      },
+    });
 
-  // 7) Public URL to render in <Image>
-  const downloadURL = await getDownloadURL(sref);
-  return downloadURL;
-};
+    const downloadURL = await getDownloadURL(sref);
+    return downloadURL;
+  };
 
   const addItem = async (item: Omit<ClosetItem, "id">) => {
     if (!user) {
@@ -336,6 +374,11 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
           i.id === id ? { ...i, tags: updatedTags } : i
         ),
       }));
+
+      // Auto-add to global tags if not already there
+      if (!globalTags.includes(tag)) {
+        await addGlobalTag(tag);
+      }
     } catch (error) {
       console.error("Error adding tag:", error);
       throw error;
@@ -364,28 +407,58 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  // FIXED FUNCTION HERE
   const updateItemDetails = async (
     id: string,
     category: string,
-    details: { brand?: string; price?: number }
+    brand?: string,
+    price?: number
   ) => {
-    if (!user) return;
+    if (!user) {
+      throw new Error("User not authenticated");
+    }
 
     try {
-      const item = closet[category]?.find((i) => i.id === id);
-      if (!item) return;
+      // Verify item exists in local state
+      const categoryItems = closet[category];
+      if (!categoryItems) {
+        throw new Error(`Category ${category} not found`);
+      }
 
-      await updateDoc(doc(db, "closet", id), {
-        brand: details.brand || null,
-        price: details.price || null,
-      });
+      const item = categoryItems.find((i) => i.id === id);
+      if (!item) {
+        throw new Error(`Item with id ${id} not found in category ${category}`);
+      }
 
+      // Create update object
+      const updateData: any = {};
+      
+      if (brand !== undefined) {
+        updateData.brand = brand || null;
+      }
+      
+      if (price !== undefined) {
+        updateData.price = price || null;
+      }
+
+      // Update Firestore
+      await updateDoc(doc(db, "closet", id), updateData);
+
+      // Update local state
       setCloset((prev) => ({
         ...prev,
         [category]: (prev[category] || []).map((i) =>
-          i.id === id ? { ...i, brand: details.brand, price: details.price } : i
+          i.id === id
+            ? {
+                ...i,
+                brand: brand !== undefined ? brand : i.brand,
+                price: price !== undefined ? price : i.price,
+              }
+            : i
         ),
       }));
+
+      console.log("Item details updated successfully");
     } catch (error) {
       console.error("Error updating item details:", error);
       throw error;
@@ -514,6 +587,7 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
       value={{
         closet,
         storages,
+        globalTags,
         addItem,
         removeItem,
         addTag,
@@ -525,6 +599,7 @@ export const ClosetProvider: React.FC<{ children: React.ReactNode }> = ({
         renameStorage,
         addItemToStorage,
         removeItemFromStorage,
+        addGlobalTag,
       }}
     >
       {children}

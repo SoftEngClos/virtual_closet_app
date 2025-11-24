@@ -24,16 +24,26 @@ import {
 } from "firebase/auth";
 import { useRouter } from "expo-router";
 import { useCloset } from "../ClosetProvider";
+import { useCurrentLocation } from "src/services/useCurrentLocation.ts";
+import { useSimpleTheme } from "src/hooks/useSimpleTheme";
+import {
+  requestNotificationPermissions,
+  checkNotificationPermissions,
+  cancelAllNotifications,
+  scheduleDailyOutfitReminder,
+  checkWeatherChangesForScheduledOutfits,
+} from "src/services/weatherNotifications";
 
 export default function ProfileScreen() {
   const router = useRouter();
   const auth = getAuth();
   const user = auth.currentUser;
   const { closet } = useCloset();
+  const { coords } = useCurrentLocation();
+  const { isDark, colors, toggleTheme } = useSimpleTheme();
 
   // Settings states
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
-  const [darkModeEnabled, setDarkModeEnabled] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
 
   // Modal states
   const [editProfileModal, setEditProfileModal] = useState(false);
@@ -45,6 +55,44 @@ export default function ProfileScreen() {
 
   // Get face image from closet
   const faceImage = closet["Face"]?.[0]?.uri;
+
+  // Check notification permission on mount
+  useEffect(() => {
+    (async () => {
+      const status = await checkNotificationPermissions();
+      setNotificationsEnabled(status === 'granted');
+    })();
+  }, []);
+
+  const handleNotificationToggle = async (value: boolean) => {
+    if (value) {
+      const status = await requestNotificationPermissions();
+      if (status === 'granted') {
+        setNotificationsEnabled(true);
+        await scheduleDailyOutfitReminder(8, 0);
+        Alert.alert(
+          'Notifications Enabled! 🔔',
+          'You will receive:\n• Daily outfit reminders at 8 AM\n• Weather alerts for scheduled outfits\n• Updates when weather changes significantly'
+        );
+        if (coords && user) {
+          await checkWeatherChangesForScheduledOutfits(user.uid, coords);
+        }
+      } else {
+        setNotificationsEnabled(false);
+        Alert.alert(
+          'Permission Denied',
+          'Please enable notifications in your device settings to receive weather alerts and outfit reminders.'
+        );
+      }
+    } else {
+      await cancelAllNotifications();
+      setNotificationsEnabled(false);
+      Alert.alert(
+        'Notifications Disabled',
+        'You will no longer receive weather alerts or daily outfit reminders.'
+      );
+    }
+  };
 
   const handleUpdateProfile = async () => {
     if (!newDisplayName.trim()) {
@@ -82,14 +130,11 @@ export default function ProfileScreen() {
     }
 
     try {
-      // Reauthenticate user
       const credential = EmailAuthProvider.credential(
         user!.email!,
         currentPassword
       );
       await reauthenticateWithCredential(user!, credential);
-
-      // Update password
       await updatePassword(user!, newPassword);
       
       Alert.alert("Success", "Password changed successfully!");
@@ -174,34 +219,34 @@ export default function ProfileScreen() {
     rightComponent 
   }: any) => (
     <TouchableOpacity 
-      style={styles.settingItem} 
+      style={[styles.settingItem, { borderBottomColor: colors.borderLight }]}
       onPress={onPress}
       disabled={!onPress && !rightComponent}
     >
       <View style={styles.settingLeft}>
-        <View style={styles.iconContainer}>
-          <Ionicons name={icon} size={22} color="#0066ff" />
+        <View style={[styles.iconContainer, { backgroundColor: colors.iconBackground }]}>
+          <Ionicons name={icon} size={22} color={colors.icon} />
         </View>
         <View style={styles.settingTextContainer}>
-          <Text style={styles.settingTitle}>{title}</Text>
-          {subtitle && <Text style={styles.settingSubtitle}>{subtitle}</Text>}
+          <Text style={[styles.settingTitle, { color: colors.text }]}>{title}</Text>
+          {subtitle && <Text style={[styles.settingSubtitle, { color: colors.textSecondary }]}>{subtitle}</Text>}
         </View>
       </View>
       {rightComponent ? rightComponent : showArrow && (
-        <Ionicons name="chevron-forward" size={20} color="#999" />
+        <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
       )}
     </TouchableOpacity>
   );
 
   const SectionHeader = ({ title }: { title: string }) => (
-    <Text style={styles.sectionHeader}>{title}</Text>
+    <Text style={[styles.sectionHeader, { color: colors.textSecondary }]}>{title}</Text>
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* Profile Header */}
-        <View style={styles.profileHeader}>
+        <View style={[styles.profileHeader, { backgroundColor: colors.card }]}>
           <View style={styles.avatarContainer}>
             {faceImage ? (
               <Image source={{ uri: faceImage }} style={styles.avatarImage} />
@@ -209,15 +254,15 @@ export default function ProfileScreen() {
               <Ionicons name="person" size={40} color="#fff" />
             )}
           </View>
-          <Text style={styles.userName}>
+          <Text style={[styles.userName, { color: colors.text }]}>
             {user?.displayName || "Set Username"}
           </Text>
-          <Text style={styles.userEmail}>{user?.email}</Text>
+          <Text style={[styles.userEmail, { color: colors.textSecondary }]}>{user?.email}</Text>
         </View>
 
         {/* Account Settings */}
         <SectionHeader title="ACCOUNT" />
-        <View style={styles.section}>
+        <View style={[styles.section, { backgroundColor: colors.card }]}>
           <SettingItem
             icon="person-outline"
             title="Edit Profile"
@@ -243,17 +288,17 @@ export default function ProfileScreen() {
 
         {/* App Settings */}
         <SectionHeader title="APP SETTINGS" />
-        <View style={styles.section}>
+        <View style={[styles.section, { backgroundColor: colors.card }]}>
           <SettingItem
             icon="notifications-outline"
-            title="Notifications"
-            subtitle="Enable outfit reminders"
+            title="Weather Notifications"
+            subtitle="Get alerts for weather changes & outfit reminders"
             showArrow={false}
             rightComponent={
               <Switch
                 value={notificationsEnabled}
-                onValueChange={setNotificationsEnabled}
-                trackColor={{ false: "#e0e0e0", true: "#0066ff" }}
+                onValueChange={handleNotificationToggle}
+                trackColor={{ false: colors.border, true: colors.primary }}
                 thumbColor="#fff"
               />
             }
@@ -261,13 +306,13 @@ export default function ProfileScreen() {
           <SettingItem
             icon="moon-outline"
             title="Dark Mode"
-            subtitle="Switch to dark theme"
+            subtitle={isDark ? "Dark theme enabled" : "Switch to dark theme"}
             showArrow={false}
             rightComponent={
               <Switch
-                value={darkModeEnabled}
-                onValueChange={setDarkModeEnabled}
-                trackColor={{ false: "#e0e0e0", true: "#0066ff" }}
+                value={isDark}
+                onValueChange={toggleTheme}
+                trackColor={{ false: colors.border, true: colors.primary }}
                 thumbColor="#fff"
               />
             }
@@ -276,7 +321,7 @@ export default function ProfileScreen() {
 
         {/* Closet Settings */}
         <SectionHeader title="CLOSET" />
-        <View style={styles.section}>
+        <View style={[styles.section, { backgroundColor: colors.card }]}>
           <SettingItem
             icon="pricetag-outline"
             title="Manage Tags"
@@ -305,7 +350,7 @@ export default function ProfileScreen() {
 
         {/* Support */}
         <SectionHeader title="SUPPORT" />
-        <View style={styles.section}>
+        <View style={[styles.section, { backgroundColor: colors.card }]}>
           <SettingItem
             icon="help-circle-outline"
             title="Help & Support"
@@ -316,7 +361,7 @@ export default function ProfileScreen() {
             icon="information-circle-outline"
             title="About"
             subtitle="App version 1.0.0"
-            onPress={() => Alert.alert("About", "Closet App v1.0.0\n\nYour digital wardrobe assistant.")}
+            onPress={() => Alert.alert("About", "Virtual Closet App v1.0.0\n\nYour AI-powered digital wardrobe assistant with weather-based outfit recommendations.")}
           />
           <SettingItem
             icon="document-text-outline"
@@ -327,15 +372,15 @@ export default function ProfileScreen() {
         </View>
 
         {/* Sign Out and Delete Account */}
-        <View style={styles.section}>
-          <TouchableOpacity style={styles.dangerButton} onPress={handleSignOut}>
-            <Ionicons name="log-out-outline" size={22} color="#ff3b30" />
-            <Text style={styles.dangerText}>Sign Out</Text>
+        <View style={[styles.section, { backgroundColor: colors.card }]}>
+          <TouchableOpacity style={[styles.dangerButton, { borderBottomColor: colors.borderLight }]} onPress={handleSignOut}>
+            <Ionicons name="log-out-outline" size={22} color={colors.error} />
+            <Text style={[styles.dangerText, { color: colors.error }]}>Sign Out</Text>
           </TouchableOpacity>
           
-          <TouchableOpacity style={styles.dangerButton} onPress={handleDeleteAccount}>
-            <Ionicons name="trash-outline" size={22} color="#ff3b30" />
-            <Text style={styles.dangerText}>Delete Account</Text>
+          <TouchableOpacity style={[styles.dangerButton, { borderBottomColor: colors.borderLight }]} onPress={handleDeleteAccount}>
+            <Ionicons name="trash-outline" size={22} color={colors.error} />
+            <Text style={[styles.dangerText, { color: colors.error }]}>Delete Account</Text>
           </TouchableOpacity>
         </View>
 
@@ -349,27 +394,35 @@ export default function ProfileScreen() {
         animationType="fade"
         onRequestClose={() => setEditProfileModal(false)}
       >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Edit Profile</Text>
-            <Text style={styles.modalSubtext}>Update your username</Text>
+        <View style={[styles.modalBackdrop, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Edit Profile</Text>
+            <Text style={[styles.modalSubtext, { color: colors.textSecondary }]}>Update your username</Text>
             
             <TextInput
               value={newDisplayName}
               onChangeText={setNewDisplayName}
               placeholder="Enter username"
-              style={styles.input}
+              placeholderTextColor={colors.textSecondary}
+              style={[styles.input, { 
+                borderColor: colors.border, 
+                color: colors.text,
+                backgroundColor: isDark ? colors.surface : colors.card
+              }]}
               autoCapitalize="words"
             />
             
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 onPress={() => setEditProfileModal(false)}
-                style={styles.modalCancelBtn}
+                style={[styles.modalCancelBtn, {
+                  backgroundColor: colors.surface,
+                  borderColor: colors.border
+                }]}
               >
-                <Text style={styles.modalBtnText}>Cancel</Text>
+                <Text style={[styles.modalBtnText, { color: colors.textSecondary }]}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={handleUpdateProfile} style={styles.modalSubmitBtn}>
+              <TouchableOpacity onPress={handleUpdateProfile} style={[styles.modalSubmitBtn, { backgroundColor: colors.primary }]}>
                 <Text style={styles.modalBtnTextPrimary}>Save</Text>
               </TouchableOpacity>
             </View>
@@ -384,33 +437,48 @@ export default function ProfileScreen() {
         animationType="fade"
         onRequestClose={() => setChangePasswordModal(false)}
       >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Change Password</Text>
-            <Text style={styles.modalSubtext}>Enter your current and new password</Text>
+        <View style={[styles.modalBackdrop, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Change Password</Text>
+            <Text style={[styles.modalSubtext, { color: colors.textSecondary }]}>Enter your current and new password</Text>
             
             <TextInput
               value={currentPassword}
               onChangeText={setCurrentPassword}
               placeholder="Current password"
+              placeholderTextColor={colors.textSecondary}
               secureTextEntry
-              style={styles.input}
+              style={[styles.input, { 
+                borderColor: colors.border, 
+                color: colors.text,
+                backgroundColor: isDark ? colors.surface : colors.card
+              }]}
             />
             
             <TextInput
               value={newPassword}
               onChangeText={setNewPassword}
               placeholder="New password"
+              placeholderTextColor={colors.textSecondary}
               secureTextEntry
-              style={styles.input}
+              style={[styles.input, { 
+                borderColor: colors.border, 
+                color: colors.text,
+                backgroundColor: isDark ? colors.surface : colors.card
+              }]}
             />
             
             <TextInput
               value={confirmPassword}
               onChangeText={setConfirmPassword}
               placeholder="Confirm new password"
+              placeholderTextColor={colors.textSecondary}
               secureTextEntry
-              style={styles.input}
+              style={[styles.input, { 
+                borderColor: colors.border, 
+                color: colors.text,
+                backgroundColor: isDark ? colors.surface : colors.card
+              }]}
             />
             
             <View style={styles.modalButtons}>
@@ -421,11 +489,14 @@ export default function ProfileScreen() {
                   setNewPassword("");
                   setConfirmPassword("");
                 }}
-                style={styles.modalCancelBtn}
+                style={[styles.modalCancelBtn, {
+                  backgroundColor: colors.surface,
+                  borderColor: colors.border
+                }]}
               >
-                <Text style={styles.modalBtnText}>Cancel</Text>
+                <Text style={[styles.modalBtnText, { color: colors.textSecondary }]}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={handleChangePassword} style={styles.modalSubmitBtn}>
+              <TouchableOpacity onPress={handleChangePassword} style={[styles.modalSubmitBtn, { backgroundColor: colors.primary }]}>
                 <Text style={styles.modalBtnTextPrimary}>Update</Text>
               </TouchableOpacity>
             </View>
@@ -438,13 +509,11 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   container: { 
-    flex: 1, 
-    backgroundColor: "#f5f7fa" 
+    flex: 1,
   },
   profileHeader: {
     alignItems: "center",
     paddingVertical: 30,
-    backgroundColor: "#fff",
     marginBottom: 20,
   },
   avatarContainer: {
@@ -464,25 +533,21 @@ const styles = StyleSheet.create({
   userName: {
     fontSize: 22,
     fontWeight: "700",
-    color: "#1a1a1a",
     marginBottom: 4,
   },
   userEmail: {
     fontSize: 14,
-    color: "#999",
     fontWeight: "500",
   },
   sectionHeader: {
     fontSize: 13,
     fontWeight: "700",
-    color: "#999",
     paddingHorizontal: 20,
     paddingTop: 20,
     paddingBottom: 8,
     letterSpacing: 0.5,
   },
   section: {
-    backgroundColor: "#fff",
     marginBottom: 12,
     paddingHorizontal: 16,
   },
@@ -492,7 +557,6 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "#f0f0f0",
   },
   settingLeft: {
     flexDirection: "row",
@@ -503,7 +567,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 8,
-    backgroundColor: "#f0f7ff",
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
@@ -514,12 +577,10 @@ const styles = StyleSheet.create({
   settingTitle: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#1a1a1a",
     marginBottom: 2,
   },
   settingSubtitle: {
     fontSize: 13,
-    color: "#999",
     fontWeight: "500",
   },
   dangerButton: {
@@ -528,21 +589,17 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     gap: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#f0f0f0",
   },
   dangerText: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#ff3b30",
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "center",
     alignItems: "center",
   },
   modalCard: {
-    backgroundColor: "#fff",
     padding: 24,
     borderRadius: 16,
     width: "85%",
@@ -555,23 +612,19 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 20,
     fontWeight: "800",
-    color: "#1a1a1a",
     marginBottom: 4,
   },
   modalSubtext: {
     fontSize: 14,
-    color: "#666",
     marginBottom: 20,
     fontWeight: "500",
   },
   input: {
     borderWidth: 1.5,
-    borderColor: "#e0e0e0",
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 15,
-    color: "#1a1a1a",
     fontWeight: "500",
     marginBottom: 12,
   },
@@ -582,16 +635,13 @@ const styles = StyleSheet.create({
   },
   modalCancelBtn: {
     flex: 1,
-    backgroundColor: "#f5f7fa",
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#e8ecf1",
   },
   modalSubmitBtn: {
     flex: 1,
-    backgroundColor: "#0066ff",
     paddingVertical: 14,
     borderRadius: 10,
     alignItems: "center",
@@ -599,7 +649,6 @@ const styles = StyleSheet.create({
   modalBtnText: {
     fontSize: 15,
     fontWeight: "700",
-    color: "#666",
   },
   modalBtnTextPrimary: {
     fontSize: 15,

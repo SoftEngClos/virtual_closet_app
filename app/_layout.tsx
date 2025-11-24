@@ -1,28 +1,28 @@
-﻿
-// app/_layout.tsx
+﻿// app/_layout.tsx
 import { Stack } from "expo-router";
 import React from "react";
 import { ClosetProvider } from "./ClosetProvider"; 
 import { UserProvider } from "./UserContext";
+// REMOVE THIS LINE: import { ThemeProvider } from "../src/contexts/ThemeContext";
 
 export default function RootLayout() {
   return (
     <UserProvider>
-    <ClosetProvider>
-      <Stack screenOptions={{ headerShown: false }}>
-        {/* Default screen is index (login/signup) */}
-        <Stack.Screen name="index" />
+      <ClosetProvider>
+        <Stack screenOptions={{ headerShown: false }}>
+          {/* Default screen is index (login/signup) */}
+          <Stack.Screen name="index" />
 
-        {/* Tabs group */}
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          {/* Tabs group */}
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 
-        {/* Register the Add Item screen at /add-item */}
-        <Stack.Screen
-          name="add-item"
-          options={{ headerShown: true, title: "Add Item" }}
-        />
-      </Stack>
-    </ClosetProvider>
+          {/* Register the Add Item screen at /add-item */}
+          <Stack.Screen
+            name="add-item"
+            options={{ headerShown: true, title: "Add Item" }}
+          />
+        </Stack>
+      </ClosetProvider>
     </UserProvider>
   );
 }

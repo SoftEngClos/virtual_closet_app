@@ -17,8 +17,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from "@expo/vector-icons";
 import { useCloset } from "../ClosetProvider";
+import { useSimpleTheme } from "src/hooks/useSimpleTheme";
 import * as ImagePicker from "expo-image-picker";
-import { auth, db } from "../../firebaseConfig";
+import { auth, db, storage } from "../../firebaseConfig";
 import {
   collection,
   addDoc,
@@ -27,13 +28,34 @@ import {
   where,
   deleteDoc,
   doc,
+  getDoc,
 } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { onAuthStateChanged } from "firebase/auth";
+import { captureRef } from "react-native-view-shot";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
-type OutfitItem = { category: string; uri: string; slotIndex: number };
-type SavedOutfit = { id: string; outfit: OutfitItem[]; category: string };
+type OutfitItem = { 
+  category: string; 
+  uri: string; 
+  slotIndex: number;
+  x?: number;
+  y?: number;
+  scale?: number;
+  rotation?: number;
+};
+
+type SavedOutfit = { 
+  id: string; 
+  outfit: OutfitItem[]; 
+  category: string; 
+  isCollage?: boolean;
+  backgroundColor?: string;
+  backgroundImage?: string;
+  previewUri?: string;
+};
+
 type OutfitCategories = Record<string, SavedOutfit[]>;
 type Slot = { category: string | null; index: number };
 
@@ -47,29 +69,58 @@ type CollageItem = {
   rotation: number;
 };
 
-// Draggable Item Component
-const DraggableItem = ({ item, onUpdate, onRemove }: any) => {
+const BACKGROUND_COLORS = [
+  "#FFFFFF", "#F5F5F5", "#E8E8E8", "#000000", 
+  "#FFE5E5", "#E5F5FF", "#FFF9E5", "#E5FFE5",
+  "#FFE5F5", "#F5E5FF", "#E5FFFF", "#FFEFE5"
+];
+
+// Draggable Item Component - FIXED
+const DraggableItem = ({ item, onUpdate, onRemove, scrollEnabled }: any) => {
   const position = useRef(new Animated.ValueXY({ x: item.x, y: item.y })).current;
   const [isDragging, setIsDragging] = useState(false);
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return Math.abs(gestureState.dx) > 5 || Math.abs(gestureState.dy) > 5;
+      },
+      onMoveShouldSetPanResponderCapture: () => true,
       onPanResponderGrant: () => {
         setIsDragging(true);
+        scrollEnabled(false);
         position.setOffset({
           x: position.x._value,
           y: position.y._value,
         });
         position.setValue({ x: 0, y: 0 });
+
+        longPressTimer.current = setTimeout(() => {
+          onRemove(item.id);
+        }, 800);
       },
-      onPanResponderMove: Animated.event(
-        [null, { dx: position.x, dy: position.y }],
-        { useNativeDriver: false }
-      ),
+      onPanResponderMove: (_, gestureState) => {
+        if (longPressTimer.current && (Math.abs(gestureState.dx) > 5 || Math.abs(gestureState.dy) > 5)) {
+          clearTimeout(longPressTimer.current);
+          longPressTimer.current = null;
+        }
+        
+        Animated.event(
+          [null, { dx: position.x, dy: position.y }],
+          { useNativeDriver: false }
+        )(_, gestureState);
+      },
       onPanResponderRelease: () => {
+        if (longPressTimer.current) {
+          clearTimeout(longPressTimer.current);
+          longPressTimer.current = null;
+        }
+
         setIsDragging(false);
+        scrollEnabled(true);
         position.flattenOffset();
         onUpdate(item.id, {
           x: position.x._value,
@@ -95,17 +146,15 @@ const DraggableItem = ({ item, onUpdate, onRemove }: any) => {
       ]}
       {...panResponder.panHandlers}
     >
-      <TouchableOpacity
-        onLongPress={() => onRemove(item.id)}
-        style={styles.draggableImageContainer}
-      >
+      <View style={styles.draggableImageContainer}>
         <Image source={{ uri: item.uri }} style={styles.draggableImage} />
-      </TouchableOpacity>
+      </View>
     </Animated.View>
   );
 };
 
 export default function OutfitsScreen() {
+  const { colors, isDark } = useSimpleTheme();
   const { closet } = useCloset();
   const allClosetCategories = Object.keys(closet).filter(
     (cat) => closet[cat]?.length > 0
@@ -126,6 +175,10 @@ export default function OutfitsScreen() {
   const [isCollageMode, setIsCollageMode] = useState(false);
   const [collageItems, setCollageItems] = useState<CollageItem[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [collageBackground, setCollageBackground] = useState("#FFFFFF");
+  const [customBackgroundUri, setCustomBackgroundUri] = useState<string | null>(null);
+  const [scrollEnabled, setScrollEnabled] = useState(true);
+  const collageCanvasRef = useRef<View>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (firebaseUser) => {
@@ -148,9 +201,17 @@ export default function OutfitsScreen() {
 
       snapshot.docs.forEach((docSnap) => {
         const data = docSnap.data() as any;
-        const { category, outfit } = data;
+        const { category, outfit, isCollage, backgroundColor, backgroundImage, previewUri } = data;
         if (!outfits[category]) outfits[category] = [];
-        outfits[category].push({ id: docSnap.id, category, outfit });
+        outfits[category].push({ 
+          id: docSnap.id, 
+          category, 
+          outfit, 
+          isCollage: isCollage || false,
+          backgroundColor,
+          backgroundImage,
+          previewUri,
+        });
       });
 
       setSavedOutfits(outfits);
@@ -159,55 +220,135 @@ export default function OutfitsScreen() {
     }
   };
 
-  const addOutfitToCategory = async (outfit: OutfitItem[], category: string) => {
+  const deleteImageFromStorage = async (imageUrl: string) => {
+    if (!imageUrl || !imageUrl.includes('firebase')) return;
+    
+    try {
+      const imageRef = ref(storage, imageUrl);
+      await deleteObject(imageRef);
+      console.log("✅ Image deleted from Firebase Storage:", imageUrl);
+    } catch (error: any) {
+      if (error.code !== 'storage/object-not-found') {
+        console.error("Error deleting image from storage:", error);
+      }
+    }
+  };
+
+  const captureCollagePreview = async (): Promise<string | null> => {
+  if (!collageCanvasRef.current || !user) return null;
+  
+  try {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    const uri = await captureRef(collageCanvasRef, {
+      format: "jpg",
+      quality: 0.7,
+      result: "tmpfile",
+    });
+
+    console.log("📸 Captured preview:", uri);
+
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    
+    console.log("📦 Blob size:", blob.size);
+    
+    const filename = `collage_preview_${Date.now()}.jpg`;
+    const storagePath = `users/${user.uid}/collages/${filename}`;
+    const storageRef = ref(storage, storagePath);
+
+    await uploadBytes(storageRef, blob, {
+      contentType: "image/jpeg",
+      customMetadata: {
+        uploadedAt: new Date().toISOString(),
+      },
+    });
+
+    const downloadURL = await getDownloadURL(storageRef);
+    console.log("✅ Preview uploaded to:", downloadURL);
+    return downloadURL;
+  } catch (error) {
+    console.error("❌ Error capturing collage preview:", error);
+    return null;
+  }
+};
+
+  const addOutfitToCategory = async (outfit: OutfitItem[], category: string, isCollage: boolean = false) => {
     if (!user) {
       Alert.alert("Error", "Please sign in to save outfits.");
       return;
     }
     
     try {
-      console.log("Saving outfit with slot positions:", outfit);
-      
-      await addDoc(collection(db, "outfits"), {
+      let outfitData: any = {
         uid: user.uid,
         category,
         outfit,
+        isCollage,
         createdAt: new Date().toISOString(),
-      });
+      };
+
+      if (isCollage) {
+        outfitData.backgroundColor = collageBackground;
+        outfitData.backgroundImage = customBackgroundUri;
+        
+        const previewUri = await captureCollagePreview();
+        if (previewUri) {
+          outfitData.previewUri = previewUri;
+        }
+      }
+
+      await addDoc(collection(db, "outfits"), outfitData);
       
       await loadOutfits(user.uid);
-      Alert.alert("Success", `Outfit saved to "${category}"!`);
+      Alert.alert("Success", `${isCollage ? 'Collage' : 'Outfit'} saved to "${category}"!`);
     } catch (err: any) {
       console.error("Error saving outfit:", err);
-      Alert.alert("Error", "Failed to save outfit. Please try again.");
+      Alert.alert("Error", "Failed to save. Please try again.");
     }
   };
 
   const deleteOutfit = async (outfitId: string) => {
     if (!user) return;
+    
     try {
+      const outfitDoc = await getDoc(doc(db, "outfits", outfitId));
+      
+      if (outfitDoc.exists()) {
+        const data = outfitDoc.data();
+        
+        if (data.previewUri) {
+          await deleteImageFromStorage(data.previewUri);
+        }
+        
+        if (data.backgroundImage) {
+          await deleteImageFromStorage(data.backgroundImage);
+        }
+      }
+      
       await deleteDoc(doc(db, "outfits", outfitId));
+      
       await loadOutfits(user.uid);
-      Alert.alert("Success", "Outfit deleted!");
+      Alert.alert("Success", "Deleted!");
     } catch (err) {
       console.error("Error deleting outfit:", err);
-      Alert.alert("Error", "Failed to delete outfit.");
+      Alert.alert("Error", "Failed to delete.");
     }
   };
 
   const handleOutfitLongPress = (outfit: SavedOutfit) => {
-    Alert.alert("Outfit Options", "What would you like to do?", [
+    Alert.alert("Options", "What would you like to do?", [
       {
-        text: "Load Outfit",
+        text: outfit.isCollage ? "Load Collage" : "Load Outfit",
         onPress: () => loadOutfitToModel(outfit),
       },
       {
-        text: "Delete Outfit",
+        text: "Delete",
         style: "destructive",
         onPress: () => {
           Alert.alert(
             "Confirm Delete",
-            "Are you sure you want to delete this outfit?",
+            "Are you sure?",
             [
               { text: "Cancel", style: "cancel" },
               {
@@ -227,14 +368,16 @@ export default function OutfitsScreen() {
     let currentOutfitItems: OutfitItem[] = [];
     
     if (isCollageMode) {
-      // Save collage items
-      currentOutfitItems = collageItems.map((item, index) => ({
+      currentOutfitItems = collageItems.map((item) => ({
         category: item.category,
         uri: item.uri,
-        slotIndex: index,
+        slotIndex: 0,
+        x: item.x,
+        y: item.y,
+        scale: item.scale,
+        rotation: item.rotation,
       }));
     } else {
-      // Save model items
       slots.forEach((slot, slotIndex) => {
         if (slot.category && closet[slot.category]?.length) {
           currentOutfitItems.push({
@@ -247,10 +390,8 @@ export default function OutfitsScreen() {
     }
 
     if (currentOutfitItems.length === 0) {
-      return Alert.alert("Empty Outfit", "Please add items to save an outfit.");
+      return Alert.alert("Empty", `Please add items to save ${isCollageMode ? 'a collage' : 'an outfit'}.`);
     }
-
-    console.log("Current outfit items with slots:", currentOutfitItems);
 
     setSelectedExistingCategory(null);
     setCustomCategoryName("");
@@ -258,7 +399,7 @@ export default function OutfitsScreen() {
   };
 
   const confirmSaveOutfit = async () => {
-    const category = selectedExistingCategory || customCategoryName.trim() || "Saved Outfits";
+    const category = selectedExistingCategory || customCategoryName.trim() || (isCollageMode ? "My Collages" : "Saved Outfits");
     
     if (!category) {
       Alert.alert("Error", "Please select or enter a category name.");
@@ -268,10 +409,14 @@ export default function OutfitsScreen() {
     let outfitItems: OutfitItem[] = [];
     
     if (isCollageMode) {
-      outfitItems = collageItems.map((item, index) => ({
+      outfitItems = collageItems.map((item) => ({
         category: item.category,
         uri: item.uri,
-        slotIndex: index,
+        slotIndex: 0,
+        x: item.x,
+        y: item.y,
+        scale: item.scale,
+        rotation: item.rotation,
       }));
     } else {
       slots.forEach((slot, slotIndex) => {
@@ -285,7 +430,7 @@ export default function OutfitsScreen() {
       });
     }
 
-    await addOutfitToCategory(outfitItems, category);
+    await addOutfitToCategory(outfitItems, category, isCollageMode);
     setSaveModalOpen(false);
     setCustomCategoryName("");
     setSelectedExistingCategory(null);
@@ -342,6 +487,19 @@ export default function OutfitsScreen() {
     }
   };
 
+  const pickCustomBackground = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: "images",
+      allowsEditing: false,
+      quality: 1,
+    });
+
+    if (!result.canceled && result.assets.length > 0) {
+      setCustomBackgroundUri(result.assets[0].uri);
+      setCollageBackground("transparent");
+    }
+  };
+
   const nextItem = (i: number) => {
     const slot = slots[i];
     if (!slot.category) return;
@@ -378,40 +536,56 @@ export default function OutfitsScreen() {
   };
 
   const loadOutfitToModel = (outfit: SavedOutfit) => {
-    console.log("Loading outfit:", outfit.outfit);
-    
-    // Initialize all slots as empty
-    const newSlots: Slot[] = Array(5)
-      .fill(null)
-      .map(() => ({ category: null, index: 0 }));
-    
-    outfit.outfit.forEach((piece, pieceIndex) => {
-      const targetSlot = piece.slotIndex !== undefined ? piece.slotIndex : pieceIndex;
+    if (outfit.isCollage) {
+      setIsCollageMode(true);
       
-      if (targetSlot >= 0 && targetSlot < 5) {
-        const items = closet[piece.category];
-        if (items && items.length > 0) {
-          const itemIndex = items.findIndex((it) => it.uri === piece.uri);
-          newSlots[targetSlot] = { 
-            category: piece.category, 
-            index: itemIndex >= 0 ? itemIndex : 0 
-          };
-          console.log(`Successfully placed ${piece.category} at slot ${targetSlot}`);
-        } else {
-          console.log(`No items found for category ${piece.category}`);
-        }
+      if (outfit.backgroundColor) {
+        setCollageBackground(outfit.backgroundColor);
       }
-    });
+      if (outfit.backgroundImage) {
+        setCustomBackgroundUri(outfit.backgroundImage);
+      }
+      
+      const loadedItems: CollageItem[] = outfit.outfit.map((piece, index) => ({
+        id: `${Date.now()}_${index}`,
+        uri: piece.uri,
+        category: piece.category,
+        x: piece.x || Math.random() * (SCREEN_WIDTH - 200) + 50,
+        y: piece.y || Math.random() * 300 + 100,
+        scale: piece.scale || 1,
+        rotation: piece.rotation || 0,
+      }));
+      setCollageItems(loadedItems);
+    } else {
+      setIsCollageMode(false);
+      const newSlots: Slot[] = Array(5)
+        .fill(null)
+        .map(() => ({ category: null, index: 0 }));
+      
+      outfit.outfit.forEach((piece) => {
+        const targetSlot = piece.slotIndex !== undefined ? piece.slotIndex : 0;
+        
+        if (targetSlot >= 0 && targetSlot < 5) {
+          const items = closet[piece.category];
+          if (items && items.length > 0) {
+            const itemIndex = items.findIndex((it) => it.uri === piece.uri);
+            newSlots[targetSlot] = { 
+              category: piece.category, 
+              index: itemIndex >= 0 ? itemIndex : 0 
+            };
+          }
+        }
+      });
+      
+      setSlots(newSlots);
+    }
     
-    console.log("Final slots:", newSlots);
-    setSlots(newSlots);
     setShowLibrary(false);
-    setIsCollageMode(false);
-    Alert.alert("Outfit Loaded", "Your outfit has been loaded to the builder!");
+    Alert.alert("Loaded", `Your ${outfit.isCollage ? 'collage' : 'outfit'} has been loaded!`);
   };
 
   const clearOutfit = () => {
-    Alert.alert("Clear Outfit", "Remove all items from the outfit?", [
+    Alert.alert("Clear", `Remove all items from the ${isCollageMode ? 'collage' : 'outfit'}?`, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Clear",
@@ -419,6 +593,8 @@ export default function OutfitsScreen() {
         onPress: () => {
           if (isCollageMode) {
             setCollageItems([]);
+            setCollageBackground("#FFFFFF");
+            setCustomBackgroundUri(null);
           } else {
             setSlots(Array(5).fill(null).map(() => ({ category: null, index: 0 })));
           }
@@ -434,7 +610,6 @@ export default function OutfitsScreen() {
     }
 
     if (isCollageMode) {
-      // Randomize collage items
       const newItems = collageItems.map(item => {
         const items = closet[item.category];
         if (items && items.length > 0) {
@@ -448,7 +623,6 @@ export default function OutfitsScreen() {
       });
       setCollageItems(newItems);
     } else {
-      // Randomize model slots
       const newSlots: Slot[] = Array(5).fill(null).map(() => ({ category: null, index: 0 }));
 
       slots.forEach((slot, i) => {
@@ -462,7 +636,7 @@ export default function OutfitsScreen() {
       const hasCategories = newSlots.some(slot => slot.category !== null);
       
       if (!hasCategories) {
-        Alert.alert("No Categories", "Please add categories to slots first, then randomize!");
+        Alert.alert("No Categories", "Please add categories to slots first!");
         return;
       }
 
@@ -473,16 +647,17 @@ export default function OutfitsScreen() {
   const toggleMode = () => {
     setIsCollageMode(!isCollageMode);
     setSelectedCategory(null);
+    setCollageBackground("#FFFFFF");
+    setCustomBackgroundUri(null);
   };
 
-  // Collage mode functions
   const addCollageItem = (item: any) => {
     const newItem: CollageItem = {
       id: `${Date.now()}_${Math.random()}`,
       uri: item.uri,
       category: selectedCategory || "Unknown",
       x: Math.random() * (SCREEN_WIDTH - 200) + 50,
-      y: Math.random() * 400 + 100,
+      y: Math.random() * 250 + 50,
       scale: 1,
       rotation: 0,
     };
@@ -511,27 +686,27 @@ export default function OutfitsScreen() {
   const existingCategories = Object.keys(savedOutfits);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       {showLibrary ? (
         <>
-          <View style={styles.headerRow}>
+          <View style={[styles.headerRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Pressable onPress={() => setShowLibrary(false)}>
-              <Ionicons name="chevron-back" size={28} color="#1a1a1a" />
+              <Ionicons name="chevron-back" size={28} color={colors.text} />
             </Pressable>
-            <Text style={styles.headerTitle}>Saved Outfits</Text>
+            <Text style={[styles.headerTitle, { color: colors.text }]}>My Library</Text>
             <View style={{ width: 28 }} />
           </View>
 
           {Object.keys(savedOutfits).length === 0 ? (
             <View style={styles.emptyState}>
-              <Ionicons name="shirt-outline" size={64} color="#ccc" />
-              <Text style={styles.emptyText}>No saved outfits yet</Text>
-              <Text style={styles.emptySubtext}>Create and save your first outfit</Text>
+              <Ionicons name="shirt-outline" size={64} color={colors.textSecondary} />
+              <Text style={[styles.emptyText, { color: colors.text }]}>No saved items yet</Text>
+              <Text style={[styles.emptySubtext, { color: colors.textSecondary }]}>Create and save your first outfit or collage</Text>
             </View>
           ) : (
             <ScrollView contentContainerStyle={styles.listContent}>
               {Object.keys(savedOutfits).map((category) => (
-                <View key={category} style={styles.categoryContainer}>
+                <View key={category} style={[styles.categoryContainer, { backgroundColor: colors.card }]}>
                   <TouchableOpacity
                     style={styles.categoryHeader}
                     onPress={() =>
@@ -541,9 +716,9 @@ export default function OutfitsScreen() {
                     }
                   >
                     <View>
-                      <Text style={styles.categoryTitle}>{category}</Text>
-                      <Text style={styles.categoryCount}>
-                        {savedOutfits[category].length} outfits
+                      <Text style={[styles.categoryTitle, { color: colors.text }]}>{category}</Text>
+                      <Text style={[styles.categoryCount, { color: colors.textSecondary }]}>
+                        {savedOutfits[category].length} items
                       </Text>
                     </View>
                     <Ionicons
@@ -553,7 +728,7 @@ export default function OutfitsScreen() {
                           : "chevron-forward"
                       }
                       size={20}
-                      color="#999"
+                      color={colors.textSecondary}
                     />
                   </TouchableOpacity>
 
@@ -562,22 +737,39 @@ export default function OutfitsScreen() {
                       {savedOutfits[category].map((item) => (
                         <TouchableOpacity
                           key={item.id}
-                          style={styles.outfitCard}
+                          style={[styles.outfitCard, { backgroundColor: colors.card, borderColor: colors.border }]}
                           onPress={() => loadOutfitToModel(item)}
                           onLongPress={() => handleOutfitLongPress(item)}
                         >
-                          <View style={styles.outfitContent}>
-                            {item.outfit.slice(0, 4).map((p, idx) => (
+                          {item.isCollage && item.previewUri ? (
+                            <View style={styles.collagePreviewContainer}>
                               <Image
-                                key={`${item.id}-${idx}`}
-                                source={{ uri: p.uri }}
-                                style={styles.thumbnail}
+                                source={{ uri: item.previewUri }}
+                                style={styles.collagePreview}
+                                resizeMode="cover"
                               />
-                            ))}
+                            </View>
+                          ) : (
+                            <View style={styles.outfitContent}>
+                              {item.outfit.slice(0, 4).map((p, idx) => (
+                                <Image
+                                  key={`${item.id}-${idx}`}
+                                  source={{ uri: p.uri }}
+                                  style={styles.thumbnail}
+                                />
+                              ))}
+                            </View>
+                          )}
+                          <View style={styles.cardFooter}>
+                            <Text style={[styles.cardLabel, { color: colors.textSecondary }]}>
+                              {item.outfit.length} items
+                            </Text>
+                            {item.isCollage && (
+                              <View style={styles.collageBadge}>
+                                <Text style={styles.collageBadgeText}>Collage</Text>
+                              </View>
+                            )}
                           </View>
-                          <Text style={styles.cardLabel}>
-                            {item.outfit.length} items
-                          </Text>
                         </TouchableOpacity>
                       ))}
                     </View>
@@ -589,92 +781,154 @@ export default function OutfitsScreen() {
         </>
       ) : (
         <View style={styles.builderWrapper}>
-          {/* Header with toggle */}
-          <View style={styles.simpleHeader}>
-            <Text style={styles.simpleHeaderTitle}>Outfit Builder</Text>
-            <TouchableOpacity onPress={toggleMode} style={styles.toggleButton}>
+          <View style={[styles.simpleHeader, { backgroundColor: colors.background }]}>
+            <Text style={[styles.simpleHeaderTitle, { color: colors.text }]}>
+              {isCollageMode ? "Collage Builder" : "Outfit Builder"}
+            </Text>
+            <TouchableOpacity onPress={toggleMode} style={[styles.toggleButton, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Ionicons 
                 name={isCollageMode ? "grid-outline" : "images-outline"} 
                 size={24} 
-                color="#1a1a1a" 
+                color={colors.text}
               />
-              <Text style={styles.toggleText}>
+              <Text style={[styles.toggleText, { color: colors.text }]}>
                 {isCollageMode ? "Model" : "Collage"}
               </Text>
             </TouchableOpacity>
           </View>
 
           {isCollageMode ? (
-            // COLLAGE MODE
-            <View style={styles.collageWrapper}>
-              <View style={styles.collageCanvas}>
-                {collageItems.map((item) => (
-                  <DraggableItem
-                    key={item.id}
-                    item={item}
-                    onUpdate={updateCollageItem}
-                    onRemove={removeCollageItem}
-                  />
-                ))}
-                {collageItems.length === 0 && (
-                  <View style={styles.collageEmptyState}>
-                    <Ionicons name="images-outline" size={48} color="#ccc" />
-                    <Text style={styles.collageEmptyText}>
-                      Select a category below to add items
-                    </Text>
+            <ScrollView 
+              style={styles.collageScrollWrapper}
+              contentContainerStyle={styles.collageScrollContent}
+              showsVerticalScrollIndicator={false}
+              scrollEnabled={scrollEnabled}
+            >
+              <View style={styles.collageWrapper}>
+                <Text style={[styles.helpText, { color: colors.textSecondary }]}>Hold item to delete</Text>
+                <View 
+                  ref={collageCanvasRef}
+                  collapsable={false}
+                  style={[
+                    styles.collageCanvas,
+                    { 
+                      backgroundColor: customBackgroundUri ? 'transparent' : collageBackground,
+                      borderColor: colors.border
+                    }
+                  ]}
+                >
+                  {customBackgroundUri && (
+                    <Image 
+                      source={{ uri: customBackgroundUri }} 
+                      style={styles.customBackground}
+                    />
+                  )}
+                  {collageItems.map((item) => (
+                    <DraggableItem
+                      key={item.id}
+                      item={item}
+                      onUpdate={updateCollageItem}
+                      onRemove={removeCollageItem}
+                      scrollEnabled={setScrollEnabled}
+                    />
+                  ))}
+                  {collageItems.length === 0 && (
+                    <View style={styles.collageEmptyState}>
+                      <Ionicons name="images-outline" size={48} color={colors.textSecondary} />
+                      <Text style={[styles.collageEmptyText, { color: colors.textSecondary }]}>
+                        Select a category below to add items
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                <View style={styles.backgroundSection}>
+                  <Text style={[styles.backgroundLabel, { color: colors.text }]}>Background</Text>
+                  <ScrollView 
+                    horizontal 
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.backgroundOptions}
+                  >
+                    {BACKGROUND_COLORS.map((color) => (
+                      <TouchableOpacity
+                        key={color}
+                        onPress={() => {
+                          setCollageBackground(color);
+                          setCustomBackgroundUri(null);
+                        }}
+                        style={[
+                          styles.colorOption,
+                          { backgroundColor: color },
+                          collageBackground === color && !customBackgroundUri && styles.colorOptionSelected,
+                        ]}
+                      >
+                        {collageBackground === color && !customBackgroundUri && (
+                          <Ionicons name="checkmark" size={20} color={color === "#FFFFFF" || color === "#F5F5F5" ? "#000" : "#fff"} />
+                        )}
+                      </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity
+                      onPress={pickCustomBackground}
+                      style={[
+                        styles.colorOption,
+                        styles.customBgButton,
+                        customBackgroundUri && styles.colorOptionSelected,
+                      ]}
+                    >
+                      <Ionicons name="image-outline" size={20} color="#666" />
+                    </TouchableOpacity>
+                  </ScrollView>
+                </View>
+
+                <View style={styles.categorySelector}>
+                  <ScrollView 
+                    horizontal 
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.categorySelectorContent}
+                  >
+                    {["Tops", "Bottoms", "Shoes", "Accessories"].map((cat) => (
+                      <TouchableOpacity
+                        key={cat}
+                        onPress={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
+                        style={[
+                          styles.categoryButton,
+                          selectedCategory === cat && styles.categoryButtonActive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.categoryButtonText,
+                            selectedCategory === cat && styles.categoryButtonTextActive,
+                          ]}
+                        >
+                          {cat}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+
+                {selectedCategory && closet[selectedCategory]?.length > 0 && (
+                  <View style={styles.itemsGridWrapper}>
+                    <ScrollView 
+                      contentContainerStyle={styles.itemsGrid}
+                      showsVerticalScrollIndicator={false}
+                    >
+                      {closet[selectedCategory].map((item) => (
+                        <TouchableOpacity
+                          key={item.id}
+                          onPress={() => addCollageItem(item)}
+                          style={styles.gridItem}
+                        >
+                          <Image source={{ uri: item.uri }} style={styles.gridItemImage} />
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
                   </View>
                 )}
               </View>
-
-              {/* Category Selector */}
-              <View style={styles.categorySelector}>
-                <ScrollView 
-                  horizontal 
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.categorySelectorContent}
-                >
-                  {["Tops", "Bottoms", "Shoes", "Accessories"].map((cat) => (
-                    <TouchableOpacity
-                      key={cat}
-                      onPress={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
-                      style={[
-                        styles.categoryButton,
-                        selectedCategory === cat && styles.categoryButtonActive,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.categoryButtonText,
-                          selectedCategory === cat && styles.categoryButtonTextActive,
-                        ]}
-                      >
-                        {cat}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-
-              {/* Items Grid */}
-              {selectedCategory && closet[selectedCategory]?.length > 0 && (
-                <ScrollView 
-                  style={styles.itemsScroll}
-                  contentContainerStyle={styles.itemsGrid}
-                >
-                  {closet[selectedCategory].map((item) => (
-                    <TouchableOpacity
-                      key={item.id}
-                      onPress={() => addCollageItem(item)}
-                      style={styles.gridItem}
-                    >
-                      <Image source={{ uri: item.uri }} style={styles.gridItemImage} />
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              )}
-            </View>
+            </ScrollView>
           ) : (
-            // MODEL MODE
             <ScrollView 
               contentContainerStyle={styles.builderContent}
               showsVerticalScrollIndicator={false}
@@ -709,7 +963,7 @@ export default function OutfitsScreen() {
                       style={[styles.slotContainer, { top: 140 * i + 40 }]}
                     >
                       <Pressable onPress={() => prevItem(i)}>
-                        <Ionicons name="chevron-back-circle" size={40} color="#1a1a1a" />
+                        <Ionicons name="chevron-back-circle" size={40} color={colors.text} />
                       </Pressable>
                       <Pressable onLongPress={() => handleSlotLongPress(i)}>
                         <Image
@@ -722,7 +976,7 @@ export default function OutfitsScreen() {
                         <Ionicons
                           name="chevron-forward-circle"
                           size={40}
-                          color="#1a1a1a"
+                          color={colors.text}
                         />
                       </Pressable>
                     </View>
@@ -730,7 +984,6 @@ export default function OutfitsScreen() {
                 })}
               </View>
 
-              {/* Clear and Randomize buttons under the builder */}
               <View style={styles.builderActions}>
                 <Pressable style={styles.randomizeButton} onPress={randomizeOutfit}>
                   <Ionicons name="shuffle-outline" size={22} color="#fff" />
@@ -745,29 +998,32 @@ export default function OutfitsScreen() {
             </ScrollView>
           )}
 
-          <View style={styles.actionContainer}>
-            <Pressable style={styles.saveButton} onPress={saveOutfit}>
-              <Ionicons name="save-outline" size={20} color="#fff" />
-              <Text style={styles.saveButtonText}>Save Outfit</Text>
+          <View style={[styles.actionContainer, { backgroundColor: colors.background }]}>
+            <Pressable style={[styles.saveButton, { backgroundColor: colors.text }]} onPress={saveOutfit}>
+              <Ionicons name="save-outline" size={20} color={colors.background} />
+              <Text style={[styles.saveButtonText, { color: colors.background }]}>
+                Save {isCollageMode ? "Collage" : "Outfit"}
+              </Text>
             </Pressable>
 
-            <Pressable style={styles.viewButton} onPress={() => setShowLibrary(true)}>
-              <Ionicons name="albums-outline" size={20} color="#1a1a1a" />
-              <Text style={styles.viewButtonText}>My Outfits</Text>
+            <Pressable style={[styles.viewButton, { backgroundColor: colors.surface }]} onPress={() => setShowLibrary(true)}>
+              <Ionicons name="albums-outline" size={20} color={colors.text} />
+              <Text style={[styles.viewButtonText, { color: colors.text }]}>My Library</Text>
             </Pressable>
           </View>
         </View>
       )}
 
-      {/* Save Outfit Modal */}
       <Modal transparent visible={saveModalOpen} animationType="fade">
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Save Outfit</Text>
+        <View style={[styles.modalBackdrop, { backgroundColor: colors.overlay }]}>
+          <View style={[styles.modalCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>
+              Save {isCollageMode ? "Collage" : "Outfit"}
+            </Text>
             
             {existingCategories.length > 0 && (
               <>
-                <Text style={styles.modalSubtext}>
+                <Text style={[styles.modalSubtext, { color: colors.textSecondary }]}>
                   Select an existing category
                 </Text>
                 <ScrollView style={styles.categoryList} showsVerticalScrollIndicator={false}>
@@ -776,7 +1032,8 @@ export default function OutfitsScreen() {
                       key={cat}
                       style={[
                         styles.categoryOption,
-                        selectedExistingCategory === cat && styles.categoryOptionSelected
+                        { backgroundColor: colors.surface },
+                        selectedExistingCategory === cat && [styles.categoryOptionSelected, { borderColor: colors.primary }]
                       ]}
                       onPress={() => {
                         setSelectedExistingCategory(cat);
@@ -785,26 +1042,28 @@ export default function OutfitsScreen() {
                     >
                       <Text style={[
                         styles.categoryOptionText,
-                        selectedExistingCategory === cat && styles.categoryOptionTextSelected
+                        { color: colors.textSecondary },
+                        selectedExistingCategory === cat && [styles.categoryOptionTextSelected, { color: colors.text }]
                       ]}>
                         {cat}
                       </Text>
-                      <Text style={styles.categoryOptionCount}>
-                        {savedOutfits[cat].length} outfits
+                      <Text style={[styles.categoryOptionCount, { color: colors.textSecondary }]}>
+                        {savedOutfits[cat].length} items
                       </Text>
                     </Pressable>
                   ))}
                 </ScrollView>
                 
-                <Text style={styles.orText}>OR</Text>
+                <Text style={[styles.orText, { color: colors.textSecondary }]}>OR</Text>
               </>
             )}
             
-            <Text style={styles.modalSubtext}>
+            <Text style={[styles.modalSubtext, { color: colors.textSecondary }]}>
               Create a new category
             </Text>
             <TextInput
-              placeholder="e.g., Casual, Work, Party"
+              placeholder={isCollageMode ? "e.g., Summer Collages, Mood Boards" : "e.g., Casual, Work, Party"}
+              placeholderTextColor={colors.textSecondary}
               value={customCategoryName}
               onChangeText={(text) => {
                 setCustomCategoryName(text);
@@ -812,7 +1071,7 @@ export default function OutfitsScreen() {
                   setSelectedExistingCategory(null);
                 }
               }}
-              style={styles.newCategoryInput}
+              style={[styles.newCategoryInput, { borderColor: colors.border, color: colors.text, backgroundColor: isDark ? colors.surface : colors.card }]}
             />
             <View style={styles.modalButtons}>
               <Pressable
@@ -821,11 +1080,11 @@ export default function OutfitsScreen() {
                   setCustomCategoryName("");
                   setSelectedExistingCategory(null);
                 }}
-                style={styles.modalCancelBtn}
+                style={[styles.modalCancelBtn, { backgroundColor: colors.surface }]}
               >
-                <Text style={styles.modalBtnText}>Cancel</Text>
+                <Text style={[styles.modalBtnText, { color: colors.textSecondary }]}>Cancel</Text>
               </Pressable>
-              <Pressable onPress={confirmSaveOutfit} style={styles.modalSubmitBtn}>
+              <Pressable onPress={confirmSaveOutfit} style={[styles.modalSubmitBtn, { backgroundColor: colors.primary }]}>
                 <Text style={styles.modalBtnTextPrimary}>Save</Text>
               </Pressable>
             </View>
@@ -836,18 +1095,15 @@ export default function OutfitsScreen() {
   );
 }
 
-// ... rest of the styles remain the same
 const styles = StyleSheet.create({
   container: { 
-    flex: 1, 
-    backgroundColor: "#fafafa" 
+    flex: 1,
   },
   builderWrapper: {
     flex: 1,
   },
   simpleHeader: {
     padding: 16,
-    backgroundColor: "#fafafa",
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
@@ -855,38 +1111,50 @@ const styles = StyleSheet.create({
   simpleHeaderTitle: {
     fontSize: 24,
     fontWeight: "700",
-    color: "#1a1a1a",
   },
   toggleButton: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#fff",
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: "#e0e0e0",
   },
   toggleText: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#1a1a1a",
   },
-  // Collage Mode Styles
+  collageScrollWrapper: {
+    flex: 1,
+  },
+  collageScrollContent: {
+    paddingBottom: 180,
+  },
   collageWrapper: {
     flex: 1,
   },
+  helpText: {
+    textAlign: "center",
+    fontSize: 12,
+    marginTop: 8,
+    marginBottom: 4,
+    fontWeight: "600",
+  },
   collageCanvas: {
-    height: 400,
-    backgroundColor: "#fff",
+    height: 380,
     margin: 16,
+    marginTop: 4,
     borderRadius: 16,
-    borderWidth: 2,
-    borderColor: "#e0e0e0",
-    borderStyle: "dashed",
     position: "relative",
     overflow: "hidden",
+    borderWidth: 1,
+  },
+  customBackground: {
+    position: "absolute",
+    width: "100%",
+    height: "100%",
+    opacity: 1,
   },
   collageEmptyState: {
     flex: 1,
@@ -896,7 +1164,6 @@ const styles = StyleSheet.create({
   collageEmptyText: {
     marginTop: 12,
     fontSize: 14,
-    color: "#999",
     fontWeight: "500",
   },
   draggableItem: {
@@ -918,6 +1185,34 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 3,
+  },
+  backgroundSection: {
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  backgroundLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 8,
+  },
+  backgroundOptions: {
+    gap: 8,
+  },
+  colorOption: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  colorOptionSelected: {
+    borderColor: "#0066ff",
+    borderWidth: 3,
+  },
+  customBgButton: {
+    backgroundColor: "#f0f0f0",
   },
   categorySelector: {
     paddingHorizontal: 16,
@@ -946,15 +1241,14 @@ const styles = StyleSheet.create({
   categoryButtonTextActive: {
     color: "#fff",
   },
-  itemsScroll: {
-    flex: 1,
+  itemsGridWrapper: {
     paddingHorizontal: 16,
+    maxHeight: 250,
   },
   itemsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
-    paddingBottom: 150,
   },
   gridItem: {
     width: (SCREEN_WIDTH - 48) / 3,
@@ -967,15 +1261,12 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
   },
-  // Model Mode Styles
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     padding: 16,
-    backgroundColor: "#fff",
     borderBottomWidth: 1,
-    borderColor: "#eee",
   },
   headerTitle: { 
     fontSize: 22, 
@@ -989,13 +1280,11 @@ const styles = StyleSheet.create({
   },
   emptyText: { 
     fontSize: 18, 
-    fontWeight: "600", 
-    color: "#666", 
+    fontWeight: "600",
     marginTop: 8 
   },
   emptySubtext: { 
-    fontSize: 14, 
-    color: "#999", 
+    fontSize: 14,
     marginTop: 4 
   },
   listContent: { 
@@ -1003,7 +1292,6 @@ const styles = StyleSheet.create({
     paddingBottom: 150 
   },
   categoryContainer: {
-    backgroundColor: "#fff",
     borderRadius: 12,
     marginBottom: 12,
     overflow: "hidden",
@@ -1018,12 +1306,10 @@ const styles = StyleSheet.create({
   },
   categoryTitle: { 
     fontSize: 18, 
-    fontWeight: "700", 
-    color: "#1a1a1a" 
+    fontWeight: "700",
   },
   categoryCount: { 
-    fontSize: 13, 
-    color: "#999", 
+    fontSize: 13,
     marginTop: 2 
   },
   outfitGrid: {
@@ -1143,13 +1429,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-around",
     padding: 16,
     paddingBottom: 85,
-    backgroundColor: "transparent",
-    borderTopWidth: 0,
-    borderColor: "transparent",
     gap: 12,
   },
   saveButton: {
-    backgroundColor: "#1a1a1a",
     borderRadius: 10,
     paddingHorizontal: 24,
     paddingVertical: 14,
@@ -1160,7 +1442,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   saveButtonText: { 
-    color: "#fff", 
     fontWeight: "700", 
     fontSize: 16 
   },
@@ -1168,7 +1449,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "#f0f0f0",
     borderRadius: 10,
     paddingHorizontal: 24,
     paddingVertical: 14,
@@ -1176,17 +1456,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   viewButtonText: { 
-    fontWeight: "700", 
-    color: "#1a1a1a", 
+    fontWeight: "700",
     fontSize: 16 
   },
   outfitCard: {
     width: "48%",
     margin: "1%",
-    backgroundColor: "#fff",
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#eee",
     overflow: "hidden",
   },
   outfitContent: {
@@ -1201,21 +1478,43 @@ const styles = StyleSheet.create({
     height: 60, 
     borderRadius: 6 
   },
+  collagePreviewContainer: {
+    width: "100%",
+    height: 140,
+    backgroundColor: "#f0f0f0",
+  },
+  collagePreview: {
+    width: "100%",
+    height: "100%",
+  },
+  cardFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+  },
   cardLabel: {
     fontSize: 12,
-    color: "#777",
-    marginBottom: 12,
-    textAlign: "center",
     fontWeight: "600",
+  },
+  collageBadge: {
+    backgroundColor: "#8b5cf6",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  collageBadgeText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "700",
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
     alignItems: "center",
     justifyContent: "center",
   },
   modalCard: {
-    backgroundColor: "#fff",
     padding: 24,
     borderRadius: 16,
     width: "85%",
@@ -1227,8 +1526,7 @@ const styles = StyleSheet.create({
     marginBottom: 12 
   },
   modalSubtext: { 
-    fontSize: 14, 
-    color: "#666", 
+    fontSize: 14,
     marginBottom: 12, 
     fontWeight: "600" 
   },
@@ -1241,39 +1539,32 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     padding: 14,
-    backgroundColor: "#f8f8f8",
     borderRadius: 10,
     marginBottom: 8,
     borderWidth: 2,
     borderColor: "transparent",
   },
   categoryOptionSelected: {
-    backgroundColor: "#e6f2ff",
-    borderColor: "#1a1a1a",
+    borderWidth: 2,
   },
   categoryOptionText: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#666",
   },
   categoryOptionTextSelected: {
-    color: "#1a1a1a",
     fontWeight: "700",
   },
   categoryOptionCount: {
     fontSize: 12,
-    color: "#999",
   },
   orText: {
     textAlign: "center",
     fontSize: 14,
     fontWeight: "700",
-    color: "#999",
     marginVertical: 12,
   },
   newCategoryInput: {
     borderWidth: 1.5,
-    borderColor: "#ddd",
     borderRadius: 10,
     padding: 14,
     fontSize: 16,
@@ -1286,19 +1577,16 @@ const styles = StyleSheet.create({
   modalCancelBtn: {
     padding: 14,
     borderRadius: 10,
-    backgroundColor: "#f0f0f0",
     flex: 1,
     alignItems: "center",
   },
   modalSubmitBtn: {
     padding: 14,
     borderRadius: 10,
-    backgroundColor: "#1a1a1a",
     flex: 1,
     alignItems: "center",
   },
   modalBtnText: { 
-    color: "#666", 
     fontWeight: "600", 
     fontSize: 16 
   },

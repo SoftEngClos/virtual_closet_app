@@ -11,7 +11,7 @@ import {
     Platform,
 } from "react-native";
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
-import { auth } from "../firebaseConfig"; // make sure firebaseConfig.ts exists
+import { auth } from "../firebaseConfig";
 import { useRouter } from "expo-router";
 import React from "react";
 
@@ -25,7 +25,7 @@ export default function Index() {
         setLoading(true);
         try {
             await signInWithEmailAndPassword(auth, email, password);
-            router.replace("/(tabs)/closet"); // ✅ Go to closet tab
+            router.replace("/(tabs)/calendar"); // ✅ Changed to calendar
         } catch (err: any) {
             alert("Login failed: " + err.message);
         } finally {
@@ -37,7 +37,7 @@ export default function Index() {
         setLoading(true);
         try {
             await createUserWithEmailAndPassword(auth, email, password);
-            router.replace("/(tabs)/closet"); // ✅ Go to closet tab
+            router.replace("/(tabs)/calendar"); // ✅ Changed to calendar
         } catch (err: any) {
             alert("Registration failed: " + err.message);
         } finally {
